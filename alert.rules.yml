@@ -1,0 +1,42 @@
+groups:
+  - name: api_prober_golden_signals
+    rules:
+      # 1. Errors Signal: High Error Rate
+      - alert: HighErrorRate
+        expr: api_prober_errors_total > 0 #  rate(api_prober_errors_total[1m]) > 0.1
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate detected on target {{ $labels.target }}"
+          description: "Target {{ $labels.target }} has an error rate above 10% for the last 30 seconds."
+
+      # 2. Latency Signal: High p99 Latency
+      - alert: HighLatency
+        expr: api_prober_latency_seconds{quantile="0.99"} > 1.5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p99 latency on target {{ $labels.target }}"
+          description: "The 99th percentile of latency for {{ $labels.target }} is above 1.5s."
+
+      # 3. Saturation Signal: Worker Capacity Reached
+      - alert: MaxWorkersReached
+        expr: api_prober_saturation_active_workers >= 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker saturation reached limits"
+          description: "Active prober workers are at or near maximum capacity ({{ $value }} workers)."
+
+      # 4. Traffic Signal: Traffic Collapse / No Probes Executing
+      - alert: TrafficCollapse
+        expr: rate(api_prober_req_total[2m]) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Traffic collapse on target {{ $labels.target }}"
+          description: "The probe rate for {{ $labels.target }} dropped to zero over the last 2 minutes. The target might be unreachable or the worker stalled."

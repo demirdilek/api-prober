@@ -7,7 +7,7 @@ A cloud-native, platform-independent SRE telemetry stack written in Go. This pro
 * **Dynamic Targets:** Monitored endpoints are dynamically loaded via `targets.csv`. A native background watcher applies updates on the fly, provisioning or gracefully terminating worker goroutines without requiring application restarts.
 * **Secure by Default:** Public traffic is forced through HTTPS via Nginx with automated self-signed certificate generation for local development.
 * **Multi-Stage & Multi-Arch Build:** Minimal Docker footprint supporting both `amd64` and `arm64` architectures.
-* **Fully Encapsulated Stack:** Self-contained environment featuring Go, Prometheus, Grafana, Nginx, and Httpbin.
+* **Fully Encapsulated Stack:** Self-contained environment featuring Go, Prometheus, Alertmanager, Grafana, Nginx, and Httpbin.
 
 ## Architecture
 
@@ -19,6 +19,16 @@ All services communicate within an isolated internal Docker bridge network. Publ
 
 * Docker and Docker Compose
 * GNU Make (optional)
+* A Pushover Account (for emergency notifications)
+
+### Secret Configuration
+
+Before starting the stack, create a `.env` file in the root directory to store your Pushover credentials. The stack automatically injects these variables into the Alertmanager configuration at runtime via a custom entrypoint, keeping secrets out of source control:
+
+```env
+PUSHOVER_USER_KEY=your_user_key_here
+PUSHOVER_API_TOKEN=your_api_token_here
+```
 
 ### Installation & Lifecycle
 
@@ -44,6 +54,23 @@ make clean
 * **Metrics:** Accessible securely from the outside via `https://localhost/metrics` (internally routed to `http://api-prober:8080/metrics`).
 * **Dashboard:** Grafana is provisioned automatically with a pre-configured dashboard available at `https://localhost/dashboard/`.
 
+## Alerting & Escalation
+
+Real-time notifications are managed via Prometheus Alertmanager based on thresholds of the 4 Golden Signals.
+
+### Emergency Priority (iOS Silent Mode Bypass)
+Alerts are pre-configured with **Priority 2 (Emergency)**. To ensure critical operational alerts break through your phone's silent switch or "Do Not Disturb" focus modes:
+1. Open **Settings** on your iOS device.
+2. Navigate to **Pushover** -> **Notifications**.
+3. Enable **Allow Critical Alerts**.
+
+### Simulating an Alert
+To verify the entire alerting pipeline from the edge to your phone, add a failing target to `targets.csv`:
+
+```csv
+http://httpbin/status/500
+```
+
 ## Troubleshooting: Container Networking
 
 Since the entire stack runs fully isolated within a custom Docker bridge network, services resolve each other directly via their service names rather than `localhost`.
@@ -65,7 +92,3 @@ Since the entire stack runs fully isolated within a custom Docker bridge network
 
 3. **Nginx Proxy Routes (`nginx.conf`):**
    If metrics or dashboards are unreachable from the outside, verify that your reverse proxy configuration routes traffic to the correct internal container names (`api-prober` and `grafana`) and that the local TLS certificates are mounted properly via `api_prober_proxy`.
-
-## Roadmap
-
-* **Alerting Integration:** Add Prometheus Alertmanager to configure real-time notifications based on the 4 Golden Signals thresholds.

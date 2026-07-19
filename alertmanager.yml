@@ -1,0 +1,18 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'target']
+  group_wait: 5s
+  group_interval: 5s
+  repeat_interval: 1h
+  receiver: 'pushover-alerts'
+
+receivers:
+  - name: 'pushover-alerts'
+    pushover_configs:
+      - user_key: 'PUSHOVER_USER_KEY_PLACEHOLDER'
+        token: 'PUSHOVER_API_TOKEN_PLACEHOLDER'
+        priority: '1'
+        title: 'SRE Alert: {{ .CommonLabels.alertname }}'
+        message: '{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}'

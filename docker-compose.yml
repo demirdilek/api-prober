@@ -30,6 +30,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./alert.rules.yml:/etc/prometheus/alert.rules.yml
       - prometheus-data:/prometheus
     expose:
       - "9090"
@@ -80,6 +81,22 @@ services:
     depends_on:
       - grafana
       - api-prober
+    networks:
+      - monitoring
+
+  alertmanager:
+    image: prom/alertmanager:v0.33.0
+    container_name: api_prober_alertmanager
+    restart: unless-stopped
+    # Wir reichen die funktionierenden Keys aus deiner .env weiter
+    environment:
+      - PUSHOVER_USER_KEY=${PUSHOVER_USER_KEY}
+      - PUSHOVER_API_TOKEN=${PUSHOVER_API_TOKEN}
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.template.yml:ro
+    # Ein fliegender Wechsel: Platzhalter ersetzen und Alertmanager starten
+    entrypoint: >
+      /bin/sh -c "sed -e 's/PUSHOVER_USER_KEY_PLACEHOLDER/'\"$${PUSHOVER_USER_KEY}\"'/g' -e 's/PUSHOVER_API_TOKEN_PLACEHOLDER/'\"$${PUSHOVER_API_TOKEN}\"'/g' /etc/alertmanager/alertmanager.template.yml > /tmp/alertmanager.yml && exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager"
     networks:
       - monitoring
 

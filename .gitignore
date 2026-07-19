@@ -39,3 +39,9 @@ Thumbs.db
 # Docker persistent data
 grafana-storage/
 prometheus-data/
+
+# Security
+.env
+
+# Local build artifacts
+api-prober

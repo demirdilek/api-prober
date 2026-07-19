@@ -2,6 +2,15 @@ global:
   scrape_interval: 2s # Aggressive interval for immediate feedback during development
   evaluation_interval: 2s
 
+rule_files:
+  - "alert.rules.yml" # Load our golden signal alert rules
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "alertmanager:9093" # Internal routing to the alertmanager container
+
 scrape_configs:
   # ONLY monitor the custom Go application
   - job_name: 'api-prober'
