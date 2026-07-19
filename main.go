@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	_ "net/http/pprof" // Trigger pprof initialization automatically
 	"os"
 	"os/signal"
 	"strings"
@@ -251,14 +252,13 @@ func main() {
 	// Start the dynamic background file watcher tracking target mutations
 	go watchTargets(ctx, targetsFile, client, activeWorkers, &mu, &wg)
 
-	// Setup the Prometheus metrics HTTP server
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-	
-	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
-	}
+	// Setup the HTTP server using the default mux to include pprof + prometheus
+    http.Handle("/metrics", promhttp.Handler())
+    
+    srv := &http.Server{
+        Addr:    ":8080",
+        Handler: nil, // Setting handler to nil forces it to use http.DefaultServeMux
+    }
 
 	// Listen for termination signals in a separate goroutine to trigger graceful shutdown
 	shutdownChan := make(chan os.Signal, 1)
