@@ -4,7 +4,7 @@ A cloud-native, platform-independent SRE telemetry stack written in Go. This pro
 
 ## Features
 
-* **Dynamic Targets:** Monitored endpoints are dynamically loaded via `targets.csv`.
+* **Dynamic Targets:** Monitored endpoints are dynamically loaded via `targets.csv`. A native background watcher applies updates on the fly, provisioning or gracefully terminating worker goroutines without requiring application restarts.
 * **Multi-Stage & Multi-Arch Build:** Minimal Docker footprint supporting both `amd64` and `arm64` architectures.
 * **Fully Encapsulated Stack:** Self-contained environment featuring Go, Prometheus, Grafana, Nginx, and Httpbin.
 

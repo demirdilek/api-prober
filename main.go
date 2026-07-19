@@ -160,22 +160,79 @@ func worker(ctx context.Context, target string, client *http.Client, wg *sync.Wa
 	}
 }
 
+// watchTargets monitors the configuration file for changes and manages live worker pools
+func watchTargets(ctx context.Context, filepath string, client *http.Client, activeWorkers map[string]context.CancelFunc, mu *sync.Mutex, wg *sync.WaitGroup) {
+	var lastModTime time.Time
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			stat, err := os.Stat(filepath)
+			if err != nil {
+				slog.Error("Failed to stat targets file", "file", filepath, "error", err)
+				continue
+			}
+
+			// Check if file has been modified since the last loop check
+			if stat.ModTime().After(lastModTime) {
+				lastModTime = stat.ModTime()
+				slog.Info("Targets file modification detected, synchronization triggered", "file", filepath)
+
+				newTargets, err := readTargets(filepath)
+				if err != nil {
+					slog.Error("Failed to read targets during live reload", "file", filepath, "error", err)
+					continue
+				}
+
+				mu.Lock()
+				// 1. Terminate workers for targets removed from the CSV configuration
+				for target, cancelFunc := range activeWorkers {
+					if !contains(newTargets, target) {
+						slog.Info("Target missing from new config, cancelling worker execution", "target", target)
+						cancelFunc()
+						delete(activeWorkers, target)
+					}
+				}
+
+				// 2. Initialize new workers for fresh targets appended to the configuration
+				for _, target := range newTargets {
+					if _, exists := activeWorkers[target]; !exists {
+						slog.Info("New target found, allocating standalone worker architecture", "target", target)
+						
+						workerCtx, workerCancel := context.WithCancel(ctx)
+						activeWorkers[target] = workerCancel
+
+						wg.Add(1)
+						go worker(workerCtx, target, client, wg)
+					}
+				}
+				mu.Unlock()
+			}
+		}
+	}
+}
+
+// Helper to determine if a specific slice context holds the required key
+func contains(slice []string, key string) bool {
+	for _, item := range slice {
+		if item == key {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	// Initialize structured production JSON logging
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
 	targetsFile := "targets.csv"
-	targets, err := readTargets(targetsFile)
-	if err != nil {
-		slog.Error("Failed to read targets file", "file", targetsFile, "error", err)
-		os.Exit(1)
-	}
-
-	if len(targets) == 0 {
-		slog.Error("No valid targets found to monitor", "file", targetsFile)
-		os.Exit(1)
-	}
 
 	// Shared HTTP client with a strict timeout policy
 	client := &http.Client{
@@ -186,12 +243,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Dynamic memory maps and synchronization primitives to safely control goroutines
 	var wg sync.WaitGroup
-	// Start a concurrent worker routine for each target
-	for _, target := range targets {
-		wg.Add(1)
-		go worker(ctx, target, client, &wg)
-	}
+	var mu sync.Mutex
+	activeWorkers := make(map[string]context.CancelFunc)
+
+	// Start the dynamic background file watcher tracking target mutations
+	go watchTargets(ctx, targetsFile, client, activeWorkers, &mu, &wg)
 
 	// Setup the Prometheus metrics HTTP server
 	mux := http.NewServeMux()
@@ -210,7 +268,7 @@ func main() {
 		<-shutdownChan
 		slog.Info("Received shutdown signal, initiating graceful termination...")
 		
-		// Stop all background worker routine loops via context cancellation
+		// Stop all background worker routine loops and file watcher via context cancellation
 		cancel()
 
 		// Allow the HTTP server 5 seconds to finish serving existing metrics requests
@@ -228,7 +286,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Wait until all workers have completely finished their last execution loop
+	// Wait until all dynamically handled workers have completely finished their last loop execution
 	wg.Wait()
 	slog.Info("Quadrasign stack components stopped cleanly. Goodbye.")
 }
