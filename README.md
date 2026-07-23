@@ -143,7 +143,6 @@ api-prober:
 ## 🗺️ Roadmap & Future Improvements
 
 - [ ] **Dynamic Probe Intervals:** Allow configurable probing intervals per target in `targets.csv`.
-- [ ] **Automated Integration Tests:** Add end-to-end tests for target CSV mutations and context cancellation.
 
 ## Troubleshooting: Container Networking
 
