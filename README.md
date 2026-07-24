@@ -159,14 +159,18 @@ The application runs locally inside a lightweight Kubernetes cluster managed via
 
 * **Cluster Setup:** Spin up your local development environment using the provided deployment Makefile commands.
 * **Secret Management:** Sensitive credentials—such as the Pushover `token` and `user_key`—are pulled securely at runtime from **1Password** using the 1Password CLI (`op read`) and injected directly into Kubernetes Secrets. No plain-text credentials are ever stored in version control.
+```bash
+  kubectl create secret generic alertmanager-secret \
+    --from-literal=pushover-user-key="$(op read 'op://vault/item/user_key')" \
+    --from-literal=pushover-api-token="$(op read 'op://vault/item/api_token')"
+```
 * **Observability Stack:** Includes Prometheus for scraping metrics, Alertmanager for notification routing, and sidecar-provisioned Grafana dashboards mapped to the local codebase.
 
-## 🗺️ Roadmap & Future Improvements
-
-
-## Troubleshooting: Container Networking
+## Troubleshooting:
 
 Since the entire stack runs fully isolated within a custom Docker bridge network, services resolve each other directly via their service names rather than `localhost`.
+
+If you run into too many open files errors during high-load tests, increase your OS file descriptor limit using ulimit -n (or configure LimitNOFILE= if running via systemd).
 
 ### Common Pitfalls:
 
