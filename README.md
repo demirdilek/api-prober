@@ -1,4 +1,4 @@
-[![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml]
+[![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml)
 
 # api-prober
 
