@@ -43,9 +43,7 @@ prometheus-data/
 # Security
 .env
 
-.idea/
-.vscode/
-dist/
-bin/
-*.local
-.DS_Store
+
+# Local archives
+*.tar
+*.tar.gz

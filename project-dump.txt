@@ -1,0 +1,1198 @@
+-e 
+
+=== ./README.md ===
+[![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml]
+
+# api-prober
+
+A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation, for distributed edge environments.
+
+## Features
+
+* **Dynamic Targets:** Monitored endpoints are dynamically loaded via `targets.csv`. A native background watcher applies updates on the fly, provisioning or gracefully terminating worker goroutines without requiring application restarts.
+* **Multi-Stage & Multi-Arch Build:** Minimal Docker footprint supporting both `amd64` and `arm64` architectures.
+* **Fully Encapsulated Stack:** Self-contained environment featuring Go, Prometheus, Alertmanager, Grafana, and Httpbin.
+* **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down the HTTP metric server, active workers, and dynamic target schedulers without dropping in-flight probes.
+* **Configurable via Environment Variables:** Fully aligned with Twelve-Factor App principles.
+* **Automated CI/CD:** GitHub Actions pipeline ensuring clean builds and dependency caching.
+
+## Architecture
+
+```text
+api-prober Architecture
+│
+├── Configuration Layer
+│   └── targets.csv (Dynamic target config via Helm ConfigMap)
+│
+├── Core Engine (Go)
+│   ├── watchTargets() (Polls targets.csv every 5s)
+│   ├── Dynamic Goroutines (Spawns/cancels per target via Context)
+│   └── Shared http.Client (Connection pooling & 5s timeouts)
+│
+├── External Endpoints
+│   └── Target APIs (Probed via HTTP GET)
+│
+└── Observability & Diagnostics Stack
+    ├── Structured Logs (JSON stdout via slog)
+    ├── Go HTTP Exporter (:8080) ──> Serves /metrics & /debug/pprof
+    ├── Prometheus ─────────> Scrapes /metrics every interval via ServiceMonitor
+    └── Grafana ──────────> Queries Prometheus via PromQL (Auto-provisioned dashboard)
+```
+
+## Getting Started
+
+### Prerequisites
+
+* Docker
+* k3d / Kubernetes
+* Helm
+* GNU Make
+
+### Local Development & Testing
+
+Run unit and integration tests with the race detector enabled:
+
+```bash
+go test -v -race ./...
+```
+
+### Local Cluster Lifecycle & Helm Deployment
+
+You can manage the local development cluster and the Helm chart lifecycle using the provided `Makefile`:
+
+```bash
+# 1. Create a local k3d Kubernetes cluster
+make k3d-up
+
+# 2. Build the local Docker image and import it into k3d
+make docker-build
+k3d image import ghcr.io/demirdilek/api-prober:latest -c mycluster
+
+# 3. Install the Prometheus monitoring stack (if not already present)
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm install prom-stack prometheus-community/kube-prometheus-stack
+
+# 4. Install the application into the cluster
+make helm-install
+```-e 
+
+=== ./main.go ===
+package main
+
+import (
+	"context"
+	"encoding/csv"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/pprof" // Trigger pprof initialization automatically
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+// Define Prometheus metrics for the 4 Golden Signals
+var (
+	latencyHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "api_prober_latency_seconds",
+			Help:    "The time taken to probe the target in seconds (Latency).",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"target"},
+	)
+
+	trafficCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "api_prober_traffic_total",
+			Help: "Total number of probes sent to the target (Traffic).",
+		},
+		[]string{"target"},
+	)
+
+	errorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "api_prober_errors_total",
+			Help: "Total number of failed probes (Errors).",
+		},
+		[]string{"target", "status_code"},
+	)
+
+	saturationGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "api_prober_saturation_active_workers",
+			Help: "Number of active concurrent probing workers (Saturation).",
+		},
+		[]string{"target"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(latencyHistogram)
+	prometheus.MustRegister(trafficCounter)
+	prometheus.MustRegister(errorCounter)
+	prometheus.MustRegister(saturationGauge)
+}
+
+// Job represents a single target probe task
+type Job struct {
+	Target string
+}
+
+func readTargets(filepath string) ([]string, error) {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var targets []string
+	reader := csv.NewReader(file)
+
+	for {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			slog.Warn("Failed to parse CSV record, skipping row", "error", err)
+			continue
+		}
+		if len(record) > 0 {
+			target := strings.TrimSpace(record[0])
+			if target != "" && !strings.HasPrefix(target, "#") {
+				targets = append(targets, target)
+			}
+		}
+	}
+	return targets, nil
+}
+
+func probeTarget(ctx context.Context, target string, client *http.Client) {
+	saturationGauge.WithLabelValues(target).Inc()
+	defer saturationGauge.WithLabelValues(target).Dec()
+
+	trafficCounter.WithLabelValues(target).Inc()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		slog.Error("Failed to create HTTP request", "target", target, "error", err)
+		errorCounter.WithLabelValues(target, "request_creation_error").Inc()
+		return
+	}
+
+	startTime := time.Now()
+	resp, err := client.Do(req)
+	duration := time.Since(startTime).Seconds()
+
+	if err != nil {
+		slog.Warn("Target is unreachable or request timed out", "target", target, "error", err)
+		errorCounter.WithLabelValues(target, "network_error").Inc()
+		return
+	}
+	defer resp.Body.Close()
+
+	latencyHistogram.WithLabelValues(target).Observe(duration)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		statusStr := fmt.Sprintf("%d", resp.StatusCode)
+		errorCounter.WithLabelValues(target, statusStr).Inc()
+		slog.Warn("Target returned non-2xx status code", "target", target, "status_code", resp.StatusCode)
+	} else {
+		slog.Debug("Target probed successfully", "target", target, "duration_seconds", duration)
+	}
+}
+
+func workerPool(ctx context.Context, jobs <-chan Job, client *http.Client, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job, ok := <-jobs:
+			if !ok {
+				return
+			}
+			probeTarget(ctx, job.Target, client)
+		}
+	}
+}
+
+func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interval time.Duration, wg *sync.WaitGroup) {
+	defer wg.Done()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	slog.Debug("Starting target scheduler", "target", target)
+
+	select {
+	case jobs <- Job{Target: target}:
+	case <-ctx.Done():
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Debug("Stopping target scheduler", "target", target)
+			return
+		case <-ticker.C:
+			select {
+			case jobs <- Job{Target: target}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func watchTargets(ctx context.Context, filepath string, jobs chan<- Job, interval time.Duration, activeSchedulers map[string]context.CancelFunc, mu *sync.Mutex, wg *sync.WaitGroup) {
+	var lastModTime time.Time
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			stat, err := os.Stat(filepath)
+			if err != nil {
+				slog.Error("Failed to stat targets file", "file", filepath, "error", err)
+				continue
+			}
+
+			if stat.ModTime().After(lastModTime) {
+				lastModTime = stat.ModTime()
+				slog.Info("Targets file modification detected, synchronization triggered", "file", filepath)
+
+				newTargets, err := readTargets(filepath)
+				if err != nil {
+					slog.Error("Failed to read targets during live reload", "file", filepath, "error", err)
+					continue
+				}
+
+				mu.Lock()
+				for target, cancelFunc := range activeSchedulers {
+					if !contains(newTargets, target) {
+						slog.Info("Target missing from new config, cancelling scheduler", "target", target)
+						cancelFunc()
+						delete(activeSchedulers, target)
+					}
+				}
+
+				for _, target := range newTargets {
+					if _, exists := activeSchedulers[target]; !exists {
+						slog.Info("New target found, allocating scheduler", "target", target)
+
+						schedCtx, schedCancel := context.WithCancel(ctx)
+						activeSchedulers[target] = schedCancel
+
+						wg.Add(1)
+						go targetScheduler(schedCtx, target, jobs, interval, wg)
+					}
+				}
+				mu.Unlock()
+			}
+		}
+	}
+}
+
+func contains(slice []string, key string) bool {
+	for _, item := range slice {
+		if item == key {
+			return true
+		}
+	}
+	return false
+}
+
+// getEnvAsInt reads an environment variable and falls back to a default if missing or invalid
+func getEnvAsInt(name string, defaultVal int) int {
+	valStr := os.Getenv(name)
+	if valStr == "" {
+		return defaultVal
+	}
+	val, err := strconv.Atoi(valStr)
+	if err != nil {
+		slog.Warn("Invalid integer for environment variable, using default", "env", name, "default", defaultVal, "error", err)
+		return defaultVal
+	}
+	return val
+}
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
+	targetsFile := "targets.csv"
+
+	// Parse environment variables for scale configuration
+	numWorkers := getEnvAsInt("WORKERS", 50)
+	jobQueueSize := getEnvAsInt("QUEUE_SIZE", 10000)
+	maxIdleConns := getEnvAsInt("MAX_IDLE_CONNS", 1000)
+	maxIdleConnsPerHost := getEnvAsInt("MAX_IDLE_CONNS_PER_HOST", 100)
+	probeIntervalSeconds := getEnvAsInt("PROBE_INTERVAL_SECONDS", 2)
+	httpTimeoutSeconds := getEnvAsInt("HTTP_TIMEOUT_SECONDS", 5)
+
+	probeInterval := time.Duration(probeIntervalSeconds) * time.Second
+
+	slog.Info("Starting api-prober with configuration",
+		"workers", numWorkers,
+		"queue_size", jobQueueSize,
+		"max_idle_conns", maxIdleConns,
+		"max_idle_conns_per_host", maxIdleConnsPerHost,
+		"probe_interval", probeInterval,
+		"http_timeout_seconds", httpTimeoutSeconds,
+	)
+
+	client := &http.Client{
+		Timeout: time.Duration(httpTimeoutSeconds) * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        maxIdleConns,
+			MaxIdleConnsPerHost: maxIdleConnsPerHost,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+
+	// Setup root context listening for termination signals
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	activeSchedulers := make(map[string]context.CancelFunc)
+
+	jobs := make(chan Job, jobQueueSize)
+
+	// Start worker pool
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go workerPool(ctx, jobs, client, &wg)
+	}
+
+	// Start target file watcher. Removed &mu.
+	go watchTargets(ctx, targetsFile, jobs, probeInterval, activeSchedulers, &mu, &wg)
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("READY"))
+	})
+
+	srv := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	// Start HTTP server in a separate goroutine
+	go func() {
+		slog.Info("Metric server starting on :8080/metrics")
+		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("HTTP server failed to run", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	// Block until context is canceled via shutdown signal
+	<-ctx.Done()
+	slog.Info("Received shutdown signal, initiating graceful termination...")
+
+	// Create shutdown context with a 5-second timeout for the HTTP server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("HTTP server forced to shutdown", "error", err)
+	}
+
+	// Wait for all workers and schedulers to finish their current tasks
+	wg.Wait()
+	slog.Info("api-prober stack components stopped cleanly. Goodbye.")
+}
+-e 
+
+=== ./main_test.go ===
+package main
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+)
+
+// English comments as preferred
+func TestReadTargets(t *testing.T) {
+	// Create a temporary directory for our test file that cleans up automatically
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "test_targets.csv")
+
+	// Define mock CSV content including comments and empty lines to test robustness
+	csvContent := `
+http://httpbin/status/200
+# This is a comment line and should be ignored
+
+http://httpbin/delay/1
+  http://httpbin/status/500  
+`
+
+	// Write the mock content to the temporary file
+	err := os.WriteFile(tmpFile, []byte(csvContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create temporary test file: %v", err)
+	}
+
+	// Execute the actual function from main.go
+	targets, err := readTargets(tmpFile)
+	if err != nil {
+		t.Fatalf("readTargets returned an unexpected error: %v", err)
+	}
+
+	// Define what we strictly expect to see parsed
+	expected := []string{
+		"http://httpbin/status/200",
+		"http://httpbin/delay/1",
+		"http://httpbin/status/500",
+	}
+
+	// Validate the length of the parsed slice
+	if len(targets) != len(expected) {
+		t.Fatalf("Expected %d targets, but got %d", len(expected), len(targets))
+	}
+
+	// Validate the exact content and trimming mechanisms
+	for i, url := range targets {
+		if url != expected[i] {
+			t.Errorf("At index %d: expected %q, but got %q", i, expected[i], url)
+		}
+	}
+}
+
+func TestReadTargets_FileNotFound(t *testing.T) {
+	// Execute the function with a file path that definitely does not exist
+	_, err := readTargets("non_existent_file.csv")
+
+	// We strictly expect an error here
+	if err == nil {
+		t.Fatal("Expected an error when reading a non-existent file, but got nil")
+	}
+}
+
+func TestWatchTargets_Integration(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "targets.csv")
+
+	// Write initial target
+	err := os.WriteFile(tmpFile, []byte("http://target1\n"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write initial targets: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	jobs := make(chan Job, 10)
+	activeSchedulers := make(map[string]context.CancelFunc)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Run watchTargets in the background with the mutex
+	go watchTargets(ctx, tmpFile, jobs, 1*time.Second, activeSchedulers, &mu, &wg)
+
+	time.Sleep(6 * time.Second)
+
+	mu.Lock()
+	if len(activeSchedulers) != 1 {
+		t.Errorf("Expected 1 active scheduler, got %d", len(activeSchedulers))
+	}
+	mu.Unlock()
+
+	err = os.WriteFile(tmpFile, []byte("http://target2\n"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to modify targets: %v", err)
+	}
+
+	time.Sleep(6 * time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(activeSchedulers) != 1 {
+		t.Errorf("Expected exactly 1 active scheduler after modification, got %d", len(activeSchedulers))
+	}
+
+	if _, exists := activeSchedulers["http://target2"]; !exists {
+		t.Errorf("Expected target2 to be scheduled")
+	}
+
+	if _, exists := activeSchedulers["http://target1"]; exists {
+		t.Errorf("Expected target1 scheduler to be cancelled and removed")
+	}
+}
+-e 
+
+=== ./certs/tls.crt ===
+-----BEGIN CERTIFICATE-----
+MIIDIzCCAgugAwIBAgIUFrMl1N91rilF70yTAWIrcSQXpxkwDQYJKoZIhvcNAQEL
+BQAwITELMAkGA1UEBhMCREUxEjAQBgNVBAMMCWxvY2FsaG9zdDAeFw0yNjA3MjMw
+NDU2MDJaFw0yNzA3MjMwNDU2MDJaMCExCzAJBgNVBAYTAkRFMRIwEAYDVQQDDAls
+b2NhbGhvc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCL4khoTOYZ
+xA7jeJEreYTxzDigvrqo98i8CcpDFcfvH5/+K/JFWJ1cr1gAtfayMz/I/RRaBlgN
+Cn+hx9bR/TbrWliuRCveo7kBaHPjco0MxeQ77C2wpGaD0RRK9asHkBIAFmNjmzzA
+9y9mpMvc4rkWMYWyaPrvUpYQe9arRifp9rDwtrkSBvsRM1/psttuqiCV31B4R0Gi
+1lIqcwMWKW1Ry20O1KLzBNYLRf7tCWmAcKp+j4C19xgUpopwJFPA+jp/8u3Ws8/M
+Ao9SiKgG/j/yUWucPNUXI8NWwxbDUANw8pUNusdC8goQd74NBvpc/0Wfx1Jessli
+b51LiHBTQMPtAgMBAAGjUzBRMB0GA1UdDgQWBBQ2unrRT46ztIo4Maru7747yCIf
+ejAfBgNVHSMEGDAWgBQ2unrRT46ztIo4Maru7747yCIfejAPBgNVHRMBAf8EBTAD
+AQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBXqYKIUZANVY8P823sFr3/qpgNpGWsOS9v
+PIwto5bwUEPM35aHCJKqqR3R9QZojsQYO6Ku3f6GiClfXC2eirq0hJJf06iaayIs
+cIEuMTG85isKCv7SGKVqsOKWnxl5gPbdV4V663NQ+Ss4pjvtXfmvv4Fnle7+rhFJ
+Gf6LCJlm0Z3Y3GyteQZplNACcM7+t1xICMg0GQNpwLM5rlMiS74tqgbRkmSto5Wd
+NKXOiHJpwAGP7cuTinCIPpGdjX1GnsxjccoT8wPLcmn9MNC8zEvHX1/oAPj319mF
+xHso3Hv2mp+Wmvo04prMYibwsC88RnMcQ2V4nWMBU9n6kPDnEaa5
+-----END CERTIFICATE-----
+-e 
+
+=== ./certs/tls.key ===
+-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCL4khoTOYZxA7j
+eJEreYTxzDigvrqo98i8CcpDFcfvH5/+K/JFWJ1cr1gAtfayMz/I/RRaBlgNCn+h
+x9bR/TbrWliuRCveo7kBaHPjco0MxeQ77C2wpGaD0RRK9asHkBIAFmNjmzzA9y9m
+pMvc4rkWMYWyaPrvUpYQe9arRifp9rDwtrkSBvsRM1/psttuqiCV31B4R0Gi1lIq
+cwMWKW1Ry20O1KLzBNYLRf7tCWmAcKp+j4C19xgUpopwJFPA+jp/8u3Ws8/MAo9S
+iKgG/j/yUWucPNUXI8NWwxbDUANw8pUNusdC8goQd74NBvpc/0Wfx1Jesslib51L
+iHBTQMPtAgMBAAECggEAIsogJnqLlrhlWIr9ldGm8AkRw160Jz5a6PNJX8Zcv3q+
+zJTK8BbCKlE8oo6e4IJw+HCC3YHq57Fm/UopgffHLyD84bh4LarL4g8DlXuBm33j
+DcknMuGsUlfPQ3ZWdy7MX0OyK81pvncrjYxqXFDx5dRiszS7Rgak5kwaX2X3Gs9+
+yzKAiVVVZ6vRMu2bftmOLHgCEwxkGbUw49QqZaek2AJwXibiyJglJDDp48dlErbx
+Tk+0N66dHs+Pw9/jIaaDQgQyzwGTBlxFh4eBOkmrCcYwBihxjAozoAYwnVbsvg7y
+Hff80AWU/B34fm+D+vSHsTk3O6Y6jytXiijitvW+mQKBgQDFZgR2yzBiuZslJYNC
+it505HYYFtW+Qr56usr34qvldPpEcaiWtnxGhMQZwiycBHUD4N7PYgmb44lPxMp1
+jRj6bD/Jgh5SwCEOR2aD/pJ9x0ELGN1/nmPadSRiKkJrCT3E/1/9PvWtiXnxXgLE
+F3bSVhTHWr4nIYQV3N5bsMEh2QKBgQC1aT7Ha88SbT4Bz8i6+hsCqXr9vZCj/+ZL
+by8yRPF6aGLZB2u60s3WUekGaR0ZN9VXzlAKORmichKFL0f2d9yyaf2Vm8U5IjXj
+OfH+Pza7pajRLzD9SAhnOAPZ+3C5WGTIYIcvrpOu4kDUABSFNCxr1M8gCdWSSS7d
+w/tbxE+SNQKBgQCLvtlSMC6k9bk75v6x0RYDsulXzHKtKxsmT675JmODIfk7EyvC
+5pW8ZqldgvWJzi34/O0/66vZzI+dBTg/WBBi2NeflJpbAuFj9nBA6axTlwgZDxVg
+D4WpVlzXkgtLM1OjbxdJdZT/sd++XEug/uuDpKU5LKiJk1SrFZ3lU5CmoQKBgQCe
+LnPwPWAkyB6OQ9jauKR+sLsur3GEnuj3E67KnXUV8Blo9mCIWbHj1C5lSZh22cls
+M9h04Y8pp1/gw/Zywdcttt/H6TiSdfMY+/i3YfVer7dBF24XHA0/u4cYNnf3FU1j
+r0+RUx8xGdW/RYafE3w8ViZ44DpawPddpbryLH3ZlQKBgDs5Rkb3RNNHHLnj4nUi
+7pNEjumbh36PQGN5VZZaAsxgzpo1DedzSwRTH/G5eeXPQAjE3W8ADNX+caAO+uXK
+mahhuJLHsbRV2m/oB+Q0GtU3jn3tNHa5MTWT4thj/VbgG3fBIwXPJCr2XuY5dECe
+MlInJ84IKRgcj902kwRifaHP
+-----END PRIVATE KEY-----
+-e 
+
+=== ./Dockerfile ===
+# Stage 1: Build
+FROM --platform=$BUILDPLATFORM golang:latest AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-w -s" -o api-prober .
+
+# Stage 2: Final minimal image
+FROM alpine:latest
+
+WORKDIR /app
+
+COPY --from=builder /app/api-prober .
+
+EXPOSE 8080
+
+CMD ["./api-prober"]-e 
+
+=== ./.github/workflows/build-and-push.yml ===
+name: Build and Push Docker Image
+
+# Trigger on push to the main branch
+on:
+  push:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io
+  # Converts repository name to lowercase automatically
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    # Grant permissions to write packages to GitHub Container Registry
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # Checkout the current repository code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Set up Docker Buildx 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Authenticate against GitHub Container Registry using the automatic token
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Automatically generate tags based on the git commit hash
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+
+      # Build the Go application and push the image to the registry
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+-e 
+
+=== ./.github/workflows/ci.yml ===
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26' 
+          cache: true
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -v ./...
+  
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run Tests
+        run: go test -v -race ./...
+
+      - name: Build
+        run: go build -v ./...-e 
+
+=== ./Makefile ===
+.PHONY: help docker-build helm-install helm-upgrade helm-uninstall deploy
+.DEFAULT_GOAL := help
+
+# Container registry configuration for Retail Edge
+IMAGE_REPO=ghcr.io/demirdilek/api-prober
+IMAGE_TAG=latest
+
+# Helm variables
+RELEASE_NAME=api-prober
+CHART_DIR=./helm/api-prober
+
+help: ## Show this help message
+	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Targets:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+docker-build: ## Build the docker image locally (only needed for local testing)
+	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
+
+helm-install: ## Install the application into the cluster
+	helm install $(RELEASE_NAME) $(CHART_DIR)
+
+helm-upgrade: ## Upgrade the existing release (pulls the new image from ghcr.io)
+	helm upgrade $(RELEASE_NAME) $(CHART_DIR)
+
+helm-uninstall: ## Completely remove the application from the cluster
+	helm uninstall $(RELEASE_NAME)
+
+deploy: helm-upgrade ## Shortcut to deploy updates from the registry-e 
+
+=== ./targets.csv ===
+http://httpbin/delay/1
+http://httpbin/status/200
+http://httpbin/status/500
+http://httpbin/status/402-e 
+
+=== ./go.mod ===
+module github.com/demirdilek/api-prober
+
+go 1.26.1
+
+require github.com/prometheus/client_golang v1.23.2
+
+require (
+	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/kr/text v0.2.0 // indirect
+	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/prometheus/client_model v0.6.2 // indirect
+	github.com/prometheus/common v0.66.1 // indirect
+	github.com/prometheus/procfs v0.16.1 // indirect
+	go.yaml.in/yaml/v2 v2.4.2 // indirect
+	golang.org/x/sys v0.35.0 // indirect
+	google.golang.org/protobuf v1.36.8 // indirect
+)
+-e 
+
+=== ./go.sum ===
+github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
+github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
+github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
+github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
+github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
+github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
+github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
+github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
+github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
+github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
+github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
+github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
+github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
+github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
+github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/prometheus/client_golang v1.23.2 h1:Je96obch5RDVy3FDMndoUsjAhG5Edi49h0RJWRi/o0o=
+github.com/prometheus/client_golang v1.23.2/go.mod h1:Tb1a6LWHB3/SPIzCoaDXI4I8UHKeFTEQ1YCr+0Gyqmg=
+github.com/prometheus/client_model v0.6.2 h1:oBsgwpGs7iVziMvrGhE53c/GrLUsZdHnqNwqPLxwZyk=
+github.com/prometheus/client_model v0.6.2/go.mod h1:y3m2F6Gdpfy6Ut/GBsUqTWZqCUvMVzSfMLjcu6wAwpE=
+github.com/prometheus/common v0.66.1 h1:h5E0h5/Y8niHc5DlaLlWLArTQI7tMrsfQjHV+d9ZoGs=
+github.com/prometheus/common v0.66.1/go.mod h1:gcaUsgf3KfRSwHY4dIMXLPV0K/Wg1oZ8+SbZk/HH/dA=
+github.com/prometheus/procfs v0.16.1 h1:hZ15bTNuirocR6u0JZ6BAHHmwS1p8B4P6MRqxtzMyRg=
+github.com/prometheus/procfs v0.16.1/go.mod h1:teAbpZRB1iIAJYREa1LsoWUXykVXA1KlTmWl8x/U+Is=
+github.com/rogpeppe/go-internal v1.10.0 h1:TMyTOH3F/DB16zRVcYyreMH6GnZZrwQVAoYjRBZyWFQ=
+github.com/rogpeppe/go-internal v1.10.0/go.mod h1:UQnix2H7Ngw/k4C5ijL5+65zddjncjaFoBhdsK/akog=
+github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
+github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
+go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
+go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
+go.yaml.in/yaml/v2 v2.4.2 h1:DzmwEr2rDGHl7lsFgAHxmNz/1NlQ7xLIrlN2h5d1eGI=
+go.yaml.in/yaml/v2 v2.4.2/go.mod h1:081UH+NErpNdqlCXm3TtEran0rJZGxAYx9hb/ELlsPU=
+golang.org/x/sys v0.35.0 h1:vz1N37gP5bs89s7He8XuIYXpyY0+QlsKmzipCbUtyxI=
+golang.org/x/sys v0.35.0/go.mod h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=
+google.golang.org/protobuf v1.36.8 h1:xHScyCOEuuwZEc6UtSOvPbAT4zRh0xcNRYekJwfqyMc=
+google.golang.org/protobuf v1.36.8/go.mod h1:fuxRtAxBytpl4zzqUh6/eyUujkJdNiuEkXntxiD/uRU=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c h1:Hei/4ADfdWqJk1ZMxUNpqntNwaWcugrBjAiHlqqRiVk=
+gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c/go.mod h1:JHkPIbrfpd72SG/EVd6muEfDQjcINNoR0C8j2r3qZ4Q=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+-e 
+
+=== ./.env.example ===
+# Pushover Credentials for Alertmanager
+PUSHOVER_USER_KEY=your_user_key_here
+PUSHOVER_API_TOKEN=your_api_token_here-e 
+
+=== ./.gitignore ===
+# Binaries and preresults
+bin/
+dist/
+out/
+certs/
+api-prober
+
+# Architecture specific files
+*.exe
+*.exe_with_dbg
+*.dll
+*.so
+*.dylib
+
+# Test coverage results
+*.out
+*.prof
+
+# Go modules dependency management
+vendor/
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+# Docker persistent data
+grafana-storage/
+prometheus-data/
+
+# Security
+.env
+
+
+# Local archives
+*.tar
+*.tar.gz-e 
+
+=== ./LICENSE ===
+MIT License
+
+Copyright (c) 2026 Hüseyin Demirdilek
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-e 
+
+=== ./helm/api-prober/templates/configmap.yaml ===
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+data:
+  targets.csv: |
+{{ .Values.targets | indent 4 }}
+
+-e 
+
+=== ./helm/api-prober/templates/dashboard-configmap.yaml ===
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-dashboard
+  labels:
+    grafana_dashboard: "1"
+data:
+  api_prober_dashboard.json: |-
+    {{- .Files.Get "dashboards/api_prober_dashboard.json" | nindent 4 }}-e 
+
+=== ./helm/api-prober/templates/prometheusrule.yaml ===
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}-rules
+  labels:
+    release: prom-stack
+spec:
+  groups:
+    - name: api-prober-golden-signals
+      rules:
+        # 1. Errors: High failure rate
+        - alert: HighErrorRate
+          expr: api_prober_errors_total > 0
+          for: 0s
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{`High error rate detected on target {{ $labels.target }}`}}'
+
+        # 2. Latency: High p99 Latency
+        - alert: HighLatency
+          expr: api_prober_latency_seconds{quantile="0.99"} > 1.5
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: '{{`High p99 latency on target {{ $labels.target }}`}}'
+
+        # 3. Saturation: Worker Capacity Reached
+        - alert: MaxWorkersReached
+          expr: api_prober_saturation_active_workers >= 10
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Worker saturation reached limits"
+
+        # 4. Traffic: Traffic Collapse / No Probes Executing
+        - alert: TrafficCollapse
+          expr: rate(api_prober_traffic_total[2m]) == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{`Traffic collapse on target {{ $labels.target }}`}}'-e 
+
+=== ./helm/api-prober/templates/service.yaml ===
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    # Add this name mapping so the ServiceMonitor can bind to it
+    - name: metrics
+      port: {{ .Values.service.port }}
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: {{ .Release.Name }}-e 
+
+=== ./helm/api-prober/templates/deployment.yaml ===
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          ports:
+            - containerPort: 8080
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/targets.csv
+              subPath: targets.csv
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ .Release.Name }}-config-e 
+
+=== ./helm/api-prober/templates/alertmanagerconfig.yaml ===
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: {{ .Release.Name }}-routing
+  labels:
+    release: prom-stack
+spec:
+  route:
+    groupBy: ['alertname', 'severity']
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 12h
+    receiver: 'pushover-notifications'
+  receivers:
+  - name: 'pushover-notifications'
+    pushoverConfigs:
+    - token:
+        name: pushover-credentials
+        key: token
+      userKey:
+        name: pushover-credentials
+        key: user_key
+      sendResolved: true
+      # Go template syntax escaped for Helm
+      title: '{{`{{ .GroupLabels.alertname }}`}}'
+      message: '{{`{{ .CommonAnnotations.summary }}\n{{ .CommonAnnotations.description }}`}}'
+      priority: '{{`{{ if eq .GroupLabels.severity "critical" }}1{{ else }}0{{ end }}`}}'-e 
+
+=== ./helm/api-prober/templates/servicemonitor.yaml ===
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    # Strictly required for the Prometheus Operator to discover the target
+    release: prom-stack
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  endpoints:
+    - port: metrics
+      interval: 2s
+      path: /metrics-e 
+
+=== ./helm/api-prober/values.yaml ===
+# Replica count for the prober
+replicaCount: 1
+
+image:
+  # Replace <your-github-username> with your actual GitHub name
+  repository: ghcr.io/demirdilek/api-prober
+  pullPolicy: Always
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# CSV configuration injected directly into the ConfigMap
+targets: |
+  https://example.com,Example
+  https://api.example.com,API
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi-e 
+
+=== ./helm/api-prober/Chart.yaml ===
+apiVersion: v2
+name: api-prober
+description: Helm chart for the API Prober
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+
+-e 
+
+=== ./helm/api-prober/dashboards/api_prober_dashboard.json ===
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Latency (99th Percentile)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(api_prober_latency_seconds_bucket[5m])) by (le, target))",
+          "legendFormat": "{{target}} (p99)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line" }, "unit": "s" }
+      }
+    },
+    {
+      "title": "Traffic (Probe Rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(api_prober_traffic_total[5m])) by (target)",
+          "legendFormat": "{{target}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line" }, "unit": "reqps" }
+      }
+    },
+    {
+      "title": "Errors (Failed Probes)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(api_prober_errors_total[5m])) by (target, status_code)",
+          "legendFormat": "{{target}} - Status {{status_code}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line" }, "unit": "none" }
+      }
+    },
+    {
+      "title": "Saturation (Active Workers)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "api_prober_saturation_active_workers",
+          "legendFormat": "{{target}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line" }, "unit": "none" }
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["sre", "network"],
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "api-prober - 4 Golden Signals",
+  "version": 2
+}

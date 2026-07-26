@@ -1,55 +1,30 @@
-# Default target executed when you just type 'make'
+.PHONY: help docker-build helm-install helm-upgrade helm-uninstall deploy
 .DEFAULT_GOAL := help
 
-.PHONY: up down clean certs help test k3d-up k3d-build k3d-deploy k3d-down
+# Container registry configuration for Retail Edge
+IMAGE_REPO=ghcr.io/demirdilek/api-prober
+IMAGE_TAG=latest
 
-# Internal command to generate the help documentation
-help:
-	@echo "Available commands:"
-	@echo "  --- Docker Compose Workflow ---"
-	@echo "  make up         - Rebuild and start the complete api-prober stack"
-	@echo "  make down       - Stop all containers"
-	@echo "  make clean      - Stop containers, wipe data, and remove certificates"
-	@echo "  make test       - Run Go unit and integration tests locally"
+# Helm variables
+RELEASE_NAME=api-prober
+CHART_DIR=./helm/api-prober
+
+help: ## Show this help message
+	@echo "Usage: make [target]"
 	@echo ""
-	@echo "  --- Kubernetes / k3d Workflow ---"
-	@echo "  make k3d-up     - Create a local k3d Kubernetes development cluster"
-	@echo "  make k3d-build  - Build the Docker image locally and load it into k3d"
-	@echo "  make k3d-deploy - Apply the Kubernetes manifests from deploy/k8s/"
-	@echo "  make k3d-down   - Destroy the local k3d cluster and release resources"
+	@echo "Targets:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-certs:
-	@mkdir -p certs
-	@if [ ! -f certs/tls.crt ]; then \
-		echo "Generating temporary self-signed TLS certificates for development..."; \
-		openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-			-keyout certs/tls.key -out certs/tls.crt \
-			-subj "/C=DE/CN=localhost"; \
-	fi
+docker-build: ## Build the docker image locally (only needed for local testing)
+	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
 
-up: certs
-	docker compose up -d --build
+helm-install: ## Install the application into the cluster
+	helm install $(RELEASE_NAME) $(CHART_DIR)
 
-down:
-	docker compose down --remove-orphans
+helm-upgrade: ## Upgrade the existing release (pulls the new image from ghcr.io)
+	helm upgrade $(RELEASE_NAME) $(CHART_DIR)
 
-clean:
-	docker compose down -v --remove-orphans
-	rm -rf certs
+helm-uninstall: ## Completely remove the application from the cluster
+	helm uninstall $(RELEASE_NAME)
 
-test:
-	go test -v ./...
-
-k3d-up:
-	k3d cluster create dev-cluster --port "8080:8080@loadbalancer"
-
-k3d-build:
-	docker build -t api-prober:latest .
-	k3d image import api-prober:latest -c dev-cluster
-	kubectl rollout restart deployment api-prober -n monitoring 2>/dev/null || true
-
-k3d-deploy:
-	kubectl apply -f deploy/k8s/api-prober.yaml
-
-k3d-down:
-	k3d cluster delete dev-cluster
+deploy: helm-upgrade ## Shortcut to deploy updates from the registry

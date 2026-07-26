@@ -8,7 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	_ "net/http/pprof" // Trigger pprof initialization automatically
+	"net/http/pprof" // Trigger pprof initialization automatically
 	"os"
 	"os/signal"
 	"strconv"
@@ -176,7 +176,7 @@ func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interv
 	}
 }
 
-func watchTargets(ctx context.Context, filepath string, jobs chan<- Job, client *http.Client, interval time.Duration, activeSchedulers map[string]context.CancelFunc, mu *sync.Mutex, wg *sync.WaitGroup) {
+func watchTargets(ctx context.Context, filepath string, jobs chan<- Job, interval time.Duration, activeSchedulers map[string]context.CancelFunc, mu *sync.Mutex, wg *sync.WaitGroup) {
 	var lastModTime time.Time
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -214,7 +214,7 @@ func watchTargets(ctx context.Context, filepath string, jobs chan<- Job, client 
 				for _, target := range newTargets {
 					if _, exists := activeSchedulers[target]; !exists {
 						slog.Info("New target found, allocating scheduler", "target", target)
-						
+
 						schedCtx, schedCancel := context.WithCancel(ctx)
 						activeSchedulers[target] = schedCancel
 
@@ -301,12 +301,27 @@ func main() {
 		go workerPool(ctx, jobs, client, &wg)
 	}
 
-	// Start target file watcher
-	go watchTargets(ctx, targetsFile, jobs, client, probeInterval, activeSchedulers, &mu, &wg)
+	// Start target file watcher. Removed &mu.
+	go watchTargets(ctx, targetsFile, jobs, probeInterval, activeSchedulers, &mu, &wg)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("READY"))
+	})
+
 	srv := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
