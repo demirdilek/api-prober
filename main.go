@@ -2,26 +2,27 @@ package main
 
 import (
 	"context"
-	"encoding/csv"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/http/pprof" // Trigger pprof initialization automatically
+	"net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
-// Define Prometheus metrics for the 4 Golden Signals
 var (
 	latencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -64,38 +65,8 @@ func init() {
 	prometheus.MustRegister(saturationGauge)
 }
 
-// Job represents a single target probe task
 type Job struct {
 	Target string
-}
-
-func readTargets(filepath string) ([]string, error) {
-	file, err := os.Open(filepath)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	var targets []string
-	reader := csv.NewReader(file)
-
-	for {
-		record, err := reader.Read()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			slog.Warn("Failed to parse CSV record, skipping row", "error", err)
-			continue
-		}
-		if len(record) > 0 {
-			target := strings.TrimSpace(record[0])
-			if target != "" && !strings.HasPrefix(target, "#") {
-				targets = append(targets, target)
-			}
-		}
-	}
-	return targets, nil
 }
 
 func probeTarget(ctx context.Context, target string, client *http.Client) {
@@ -125,7 +96,7 @@ func probeTarget(ctx context.Context, target string, client *http.Client) {
 	latencyHistogram.WithLabelValues(target).Observe(duration)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		statusStr := fmt.Sprintf("%d", resp.StatusCode)
+		statusStr := strconv.Itoa(resp.StatusCode)
 		errorCounter.WithLabelValues(target, statusStr).Inc()
 		slog.Warn("Target returned non-2xx status code", "target", target, "status_code", resp.StatusCode)
 	} else {
@@ -153,8 +124,6 @@ func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interv
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	slog.Debug("Starting target scheduler", "target", target)
-
 	select {
 	case jobs <- Job{Target: target}:
 	case <-ctx.Done():
@@ -164,7 +133,6 @@ func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interv
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Debug("Stopping target scheduler", "target", target)
 			return
 		case <-ticker.C:
 			select {
@@ -176,54 +144,81 @@ func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interv
 	}
 }
 
-func watchTargets(ctx context.Context, filepath string, jobs chan<- Job, interval time.Duration, activeSchedulers map[string]context.CancelFunc, mu *sync.Mutex, wg *sync.WaitGroup) {
-	var lastModTime time.Time
+// watchK8sServices implements Service Discovery using the K8s API
+func watchK8sServices(ctx context.Context, jobs chan<- Job, interval time.Duration, activeSchedulers map[string]context.CancelFunc, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	// Try in-cluster config first, fallback to local kubeconfig for development
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		kubeconfig := os.Getenv("KUBECONFIG")
+		if kubeconfig == "" {
+			kubeconfig = filepath.Join(os.Getenv("HOME"), ".kube", "config")
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			slog.Error("Failed to build k8s config", "error", err)
+			return
+		}
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		slog.Error("Failed to create k8s clientset", "error", err)
+		return
+	}
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	var mu sync.Mutex
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			stat, err := os.Stat(filepath)
+			// List services across all namespaces with label 'probe=true'
+			services, err := clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{
+				LabelSelector: "probe=true",
+			})
 			if err != nil {
-				slog.Error("Failed to stat targets file", "file", filepath, "error", err)
+				slog.Error("Failed to list k8s services", "error", err)
 				continue
 			}
 
-			if stat.ModTime().After(lastModTime) {
-				lastModTime = stat.ModTime()
-				slog.Info("Targets file modification detected, synchronization triggered", "file", filepath)
-
-				newTargets, err := readTargets(filepath)
-				if err != nil {
-					slog.Error("Failed to read targets during live reload", "file", filepath, "error", err)
-					continue
+			var discoveredTargets []string
+			for _, svc := range services.Items {
+				probePath := "/status/200"
+				if pathAnnot, ok := svc.Annotations["probe/path"]; ok && pathAnnot != "" {
+					probePath = pathAnnot
 				}
 
-				mu.Lock()
-				for target, cancelFunc := range activeSchedulers {
-					if !contains(newTargets, target) {
-						slog.Info("Target missing from new config, cancelling scheduler", "target", target)
-						cancelFunc()
-						delete(activeSchedulers, target)
-					}
+				for _, port := range svc.Spec.Ports {
+					targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svc.Name, svc.Namespace, port.Port, probePath)
+					discoveredTargets = append(discoveredTargets, targetURL)
 				}
-
-				for _, target := range newTargets {
-					if _, exists := activeSchedulers[target]; !exists {
-						slog.Info("New target found, allocating scheduler", "target", target)
-
-						schedCtx, schedCancel := context.WithCancel(ctx)
-						activeSchedulers[target] = schedCancel
-
-						wg.Add(1)
-						go targetScheduler(schedCtx, target, jobs, interval, wg)
-					}
-				}
-				mu.Unlock()
 			}
+
+			mu.Lock()
+			for target, cancelFunc := range activeSchedulers {
+				if !contains(discoveredTargets, target) {
+					slog.Info("Target service removed, stopping scheduler", "target", target)
+					cancelFunc()
+					delete(activeSchedulers, target)
+				}
+			}
+
+			for _, target := range discoveredTargets {
+				if _, exists := activeSchedulers[target]; !exists {
+					slog.Info("New K8s service discovered, allocating scheduler", "target", target)
+					schedCtx, schedCancel := context.WithCancel(ctx)
+					activeSchedulers[target] = schedCancel
+
+					wg.Add(1)
+					go targetScheduler(schedCtx, target, jobs, interval, wg)
+				}
+			}
+			mu.Unlock()
 		}
 	}
 }
@@ -237,7 +232,6 @@ func contains(slice []string, key string) bool {
 	return false
 }
 
-// getEnvAsInt reads an environment variable and falls back to a default if missing or invalid
 func getEnvAsInt(name string, defaultVal int) int {
 	valStr := os.Getenv(name)
 	if valStr == "" {
@@ -245,7 +239,6 @@ func getEnvAsInt(name string, defaultVal int) int {
 	}
 	val, err := strconv.Atoi(valStr)
 	if err != nil {
-		slog.Warn("Invalid integer for environment variable, using default", "env", name, "default", defaultVal, "error", err)
 		return defaultVal
 	}
 	return val
@@ -255,9 +248,6 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	targetsFile := "targets.csv"
-
-	// Parse environment variables for scale configuration
 	numWorkers := getEnvAsInt("WORKERS", 50)
 	jobQueueSize := getEnvAsInt("QUEUE_SIZE", 10000)
 	maxIdleConns := getEnvAsInt("MAX_IDLE_CONNS", 1000)
@@ -266,15 +256,6 @@ func main() {
 	httpTimeoutSeconds := getEnvAsInt("HTTP_TIMEOUT_SECONDS", 5)
 
 	probeInterval := time.Duration(probeIntervalSeconds) * time.Second
-
-	slog.Info("Starting api-prober with configuration",
-		"workers", numWorkers,
-		"queue_size", jobQueueSize,
-		"max_idle_conns", maxIdleConns,
-		"max_idle_conns_per_host", maxIdleConnsPerHost,
-		"probe_interval", probeInterval,
-		"http_timeout_seconds", httpTimeoutSeconds,
-	)
 
 	client := &http.Client{
 		Timeout: time.Duration(httpTimeoutSeconds) * time.Second,
@@ -285,27 +266,24 @@ func main() {
 		},
 	}
 
-	// Setup root context listening for termination signals
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	var wg sync.WaitGroup
-	var mu sync.Mutex
 	activeSchedulers := make(map[string]context.CancelFunc)
-
 	jobs := make(chan Job, jobQueueSize)
 
-	// Start worker pool
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go workerPool(ctx, jobs, client, &wg)
 	}
 
-	// Start target file watcher. Removed &mu.
-	go watchTargets(ctx, targetsFile, jobs, probeInterval, activeSchedulers, &mu, &wg)
+	wg.Add(1)
+	go watchK8sServices(ctx, jobs, probeInterval, activeSchedulers, &wg)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
+
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
@@ -316,39 +294,28 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
-
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("READY"))
 	})
 
-	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
-	}
+	srv := &http.Server{Addr: ":8080", Handler: mux}
 
-	// Start HTTP server in a separate goroutine
 	go func() {
-		slog.Info("Metric server starting on :8080/metrics")
+		slog.Info("Metric server starting on :8080")
 		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("HTTP server failed to run", "error", err)
 			os.Exit(1)
 		}
 	}()
 
-	// Block until context is canceled via shutdown signal
 	<-ctx.Done()
 	slog.Info("Received shutdown signal, initiating graceful termination...")
 
-	// Create shutdown context with a 5-second timeout for the HTTP server
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("HTTP server forced to shutdown", "error", err)
-	}
-
-	// Wait for all workers and schedulers to finish their current tasks
+	_ = srv.Shutdown(shutdownCtx)
 	wg.Wait()
 	slog.Info("api-prober stack components stopped cleanly. Goodbye.")
 }

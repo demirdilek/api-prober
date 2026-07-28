@@ -2,117 +2,116 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 )
 
 // English comments as preferred
-func TestReadTargets(t *testing.T) {
-	// Create a temporary directory for our test file that cleans up automatically
-	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "test_targets.csv")
 
-	// Define mock CSV content including comments and empty lines to test robustness
-	csvContent := `
-http://httpbin/status/200
-# This is a comment line and should be ignored
+func TestContains(t *testing.T) {
+	slice := []string{"http://service-a", "http://service-b", "http://service-c"}
 
-http://httpbin/delay/1
-  http://httpbin/status/500  
-`
-
-	// Write the mock content to the temporary file
-	err := os.WriteFile(tmpFile, []byte(csvContent), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create temporary test file: %v", err)
+	if !contains(slice, "http://service-b") {
+		t.Errorf("Expected slice to contain 'http://service-b'")
 	}
 
-	// Execute the actual function from main.go
-	targets, err := readTargets(tmpFile)
-	if err != nil {
-		t.Fatalf("readTargets returned an unexpected error: %v", err)
-	}
-
-	// Define what we strictly expect to see parsed
-	expected := []string{
-		"http://httpbin/status/200",
-		"http://httpbin/delay/1",
-		"http://httpbin/status/500",
-	}
-
-	// Validate the length of the parsed slice
-	if len(targets) != len(expected) {
-		t.Fatalf("Expected %d targets, but got %d", len(expected), len(targets))
-	}
-
-	// Validate the exact content and trimming mechanisms
-	for i, url := range targets {
-		if url != expected[i] {
-			t.Errorf("At index %d: expected %q, but got %q", i, expected[i], url)
-		}
+	if contains(slice, "http://service-d") {
+		t.Errorf("Did not expect slice to contain 'http://service-d'")
 	}
 }
 
-func TestReadTargets_FileNotFound(t *testing.T) {
-	// Execute the function with a file path that definitely does not exist
-	_, err := readTargets("non_existent_file.csv")
+func TestGetEnvAsInt(t *testing.T) {
+	envKey := "TEST_WORKERS_COUNT"
+	defaultVal := 50
 
-	// We strictly expect an error here
-	if err == nil {
-		t.Fatal("Expected an error when reading a non-existent file, but got nil")
+	// Test default value when env is empty
+	os.Unsetenv(envKey)
+	if val := getEnvAsInt(envKey, defaultVal); val != defaultVal {
+		t.Errorf("Expected default value %d, got %d", defaultVal, val)
 	}
+
+	// Test valid integer input
+	os.Setenv(envKey, "100")
+	if val := getEnvAsInt(envKey, defaultVal); val != 100 {
+		t.Errorf("Expected 100, got %d", val)
+	}
+
+	// Test invalid integer fallback
+	os.Setenv(envKey, "invalid_number")
+	if val := getEnvAsInt(envKey, defaultVal); val != defaultVal {
+		t.Errorf("Expected fallback to default value %d on invalid input, got %d", defaultVal, val)
+	}
+
+	os.Unsetenv(envKey)
 }
 
-func TestWatchTargets_Integration(t *testing.T) {
-	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "targets.csv")
+func TestProbeTarget_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
 
-	// Write initial target
-	err := os.WriteFile(tmpFile, []byte("http://target1\n"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to write initial targets: %v", err)
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
+	client := server.Client()
+
+	// Perform probe on successful endpoint
+	probeTarget(ctx, server.URL, client)
+}
+
+func TestProbeTarget_Non2xxStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	client := server.Client()
+
+	// Perform probe on failing endpoint
+	probeTarget(ctx, server.URL, client)
+}
+
+func TestTargetScheduler(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	jobs := make(chan Job, 10)
-	activeSchedulers := make(map[string]context.CancelFunc)
-	var mu sync.Mutex
+	interval := 50 * time.Millisecond
+	target := "http://test-target.svc.cluster.local"
+
 	var wg sync.WaitGroup
+	wg.Add(1)
 
-	// Run watchTargets in the background with the mutex
-	go watchTargets(ctx, tmpFile, jobs, 1*time.Second, activeSchedulers, &mu, &wg)
+	go targetScheduler(ctx, target, jobs, interval, &wg)
 
-	time.Sleep(6 * time.Second)
-
-	mu.Lock()
-	if len(activeSchedulers) != 1 {
-		t.Errorf("Expected 1 active scheduler, got %d", len(activeSchedulers))
-	}
-	mu.Unlock()
-
-	err = os.WriteFile(tmpFile, []byte("http://target2\n"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to modify targets: %v", err)
+	// Verify immediate first execution
+	select {
+	case job := <-jobs:
+		if job.Target != target {
+			t.Errorf("Expected target %s, got %s", target, job.Target)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Timeout waiting for initial scheduled job")
 	}
 
-	time.Sleep(6 * time.Second)
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(activeSchedulers) != 1 {
-		t.Errorf("Expected exactly 1 active scheduler after modification, got %d", len(activeSchedulers))
+	// Verify subsequent tick execution
+	select {
+	case job := <-jobs:
+		if job.Target != target {
+			t.Errorf("Expected target %s, got %s", target, job.Target)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Timeout waiting for second scheduled job tick")
 	}
 
-	if _, exists := activeSchedulers["http://target2"]; !exists {
-		t.Errorf("Expected target2 to be scheduled")
-	}
-
-	if _, exists := activeSchedulers["http://target1"]; exists {
-		t.Errorf("Expected target1 scheduler to be cancelled and removed")
-	}
+	cancel()
+	wg.Wait()
 }

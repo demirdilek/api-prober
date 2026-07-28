@@ -1,0 +1,7 @@
+.git
+.github
+bin/
+dist/
+api-prober
+*.out
+*.log

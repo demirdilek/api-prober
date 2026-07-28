@@ -1,0 +1,16 @@
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: local-vault-store
+  namespace: default
+spec:
+  provider:
+    vault:
+      server: "http://vault-dev.default.svc.cluster.local:8200"
+      path: "secret"
+      version: "v2"
+      auth:
+        tokenSecretRef:
+          name: vault-token
+          key: token
+

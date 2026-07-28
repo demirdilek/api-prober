@@ -1,52 +1,53 @@
 -e 
 
 === ./README.md ===
-[![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml]
+## Getting Started
+[![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml)
 
 # api-prober
 
-A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation, for distributed edge environments.
+A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation) for distributed edge environments.
 
 ## Features
 
-* **Dynamic Targets:** Monitored endpoints are dynamically loaded via `targets.csv`. A native background watcher applies updates on the fly, provisioning or gracefully terminating worker goroutines without requiring application restarts.
+* **Dynamic Targets:** Monitored endpoints are dynamically loaded via `targets.csv`. A native background watcher applies updates on the fly without requiring application restarts.
+* **Enterprise Secret Management:** Fully decoupled credential management using HashiCorp Vault and External Secrets Operator (ESO). Secrets are injected as secure file mounts, preventing environment variable leaks.
+* **Configuration as Code:** The entire Prometheus monitoring stack is configured declaratively via `prom-stack-values.yaml`, preparing the project for GitOps workflows.
+* **Fully Encapsulated Stack:** Self-contained environment featuring Go, Prometheus, Alertmanager, Grafana, HashiCorp Vault, and Httpbin.
 * **Multi-Stage & Multi-Arch Build:** Minimal Docker footprint supporting both `amd64` and `arm64` architectures.
-* **Fully Encapsulated Stack:** Self-contained environment featuring Go, Prometheus, Alertmanager, Grafana, and Httpbin.
-* **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down the HTTP metric server, active workers, and dynamic target schedulers without dropping in-flight probes.
-* **Configurable via Environment Variables:** Fully aligned with Twelve-Factor App principles.
-* **Automated CI/CD:** GitHub Actions pipeline ensuring clean builds and dependency caching.
+* **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down without dropping in-flight probes.
 
 ## Architecture
 
 ```text
 api-prober Architecture
-│
-├── Configuration Layer
-│   └── targets.csv (Dynamic target config via Helm ConfigMap)
-│
-├── Core Engine (Go)
-│   ├── watchTargets() (Polls targets.csv every 5s)
-│   ├── Dynamic Goroutines (Spawns/cancels per target via Context)
-│   └── Shared http.Client (Connection pooling & 5s timeouts)
-│
-├── External Endpoints
-│   └── Target APIs (Probed via HTTP GET)
-│
-└── Observability & Diagnostics Stack
-    ├── Structured Logs (JSON stdout via slog)
-    ├── Go HTTP Exporter (:8080) ──> Serves /metrics & /debug/pprof
-    ├── Prometheus ─────────> Scrapes /metrics every interval via ServiceMonitor
-    └── Grafana ──────────> Queries Prometheus via PromQL (Auto-provisioned dashboard)
-```
+|
+|-- Configuration & Secrets Layer
+|   |-- targets.csv (Dynamic target config via Helm ConfigMap)
+|   |-- HashiCorp Vault (Dev Server)
+|   |-- External Secrets Operator (Syncs Vault to Kubernetes Secrets)
+|
+|-- Core Engine (Go)
+|   |-- watchTargets() (Polls targets.csv every 5s)
+|   |-- Dynamic Goroutines (Spawns/cancels per target via Context)
+|
+|-- External Endpoints
+|   |-- Target APIs (Probed via HTTP GET)
+|
+|-- Observability & Diagnostics Stack
+    |-- Go HTTP Exporter (:8080) --> Serves /metrics & /debug/pprof
+    |-- Prometheus --------------> Scrapes /metrics every interval
+    |-- Alertmanager ------------> Reads file-mounted secrets & pushes to Pushover
+    |-- Grafana -----------------> Auto-provisioned dashboard
 
 ## Getting Started
-
 ### Prerequisites
 
 * Docker
 * k3d / Kubernetes
 * Helm
 * GNU Make
+* HashiCorp Vault *(runs locally in dev mode via Docker; no local CLI installation required)*
 
 ### Local Development & Testing
 
@@ -75,6 +76,41 @@ helm install prom-stack prometheus-community/kube-prometheus-stack
 
 # 4. Install the application into the cluster
 make helm-install
+```
+
+## Kubernetes & Helm Configuration
+
+The application runs inside a Kubernetes cluster managed via k3d, paired with the kube-prometheus-stack Helm chart.
+
+* Chart Location: ./helm/api-prober
+
+* Secret Management: Sensitive credentials—such as the Pushover token and user_key—are pulled securely at runtime from 1Password using the 1Password CLI (op read) and injected directly into Kubernetes Secrets.
+
+```bash
+kubectl create secret generic pushover-credentials \
+  --from-literal=user_key="$(op read 'op://vault/item/user_key')" \
+  --from-literal=token="$(op read 'op://vault/item/api_token')"
+```
+
+* Observability Stack: Includes Prometheus for scraping metrics via ServiceMonitor, Alertmanager with AlertmanagerConfig for Pushover notifications, and sidecar-provisioned Grafana dashboards.
+
+## Alerting & Escalation
+
+Real-time notifications are managed via Prometheus Alertmanager based on thresholds of the 4 Golden Signals.
+
+### Emergency Priority (iOS Silent Mode Bypass)
+Alerts are pre-configured with Priority 2 (Emergency). To ensure critical operational alerts break through your phone's silent switch or "Do Not Disturb" focus modes:
+
+* 1. Open Settings on your iOS device.
+* 2. Navigate to Pushover -> Notifications.
+* 3. Enable Allow Critical Alerts.
+
+### Simulating an Alert
+To verify the entire alerting pipeline from the edge to your phone, add a failing target to targets.csv:
+
+Code-Snippet
+```text
+http://httpbin/status/500
 ```-e 
 
 === ./main.go ===
@@ -82,26 +118,27 @@ package main
 
 import (
 	"context"
-	"encoding/csv"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/http/pprof" // Trigger pprof initialization automatically
+	"net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
-// Define Prometheus metrics for the 4 Golden Signals
 var (
 	latencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -144,38 +181,8 @@ func init() {
 	prometheus.MustRegister(saturationGauge)
 }
 
-// Job represents a single target probe task
 type Job struct {
 	Target string
-}
-
-func readTargets(filepath string) ([]string, error) {
-	file, err := os.Open(filepath)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	var targets []string
-	reader := csv.NewReader(file)
-
-	for {
-		record, err := reader.Read()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			slog.Warn("Failed to parse CSV record, skipping row", "error", err)
-			continue
-		}
-		if len(record) > 0 {
-			target := strings.TrimSpace(record[0])
-			if target != "" && !strings.HasPrefix(target, "#") {
-				targets = append(targets, target)
-			}
-		}
-	}
-	return targets, nil
 }
 
 func probeTarget(ctx context.Context, target string, client *http.Client) {
@@ -205,7 +212,7 @@ func probeTarget(ctx context.Context, target string, client *http.Client) {
 	latencyHistogram.WithLabelValues(target).Observe(duration)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		statusStr := fmt.Sprintf("%d", resp.StatusCode)
+		statusStr := strconv.Itoa(resp.StatusCode)
 		errorCounter.WithLabelValues(target, statusStr).Inc()
 		slog.Warn("Target returned non-2xx status code", "target", target, "status_code", resp.StatusCode)
 	} else {
@@ -233,8 +240,6 @@ func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interv
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	slog.Debug("Starting target scheduler", "target", target)
-
 	select {
 	case jobs <- Job{Target: target}:
 	case <-ctx.Done():
@@ -244,7 +249,6 @@ func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interv
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Debug("Stopping target scheduler", "target", target)
 			return
 		case <-ticker.C:
 			select {
@@ -256,54 +260,81 @@ func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interv
 	}
 }
 
-func watchTargets(ctx context.Context, filepath string, jobs chan<- Job, interval time.Duration, activeSchedulers map[string]context.CancelFunc, mu *sync.Mutex, wg *sync.WaitGroup) {
-	var lastModTime time.Time
+// watchK8sServices implements Service Discovery using the K8s API
+func watchK8sServices(ctx context.Context, jobs chan<- Job, interval time.Duration, activeSchedulers map[string]context.CancelFunc, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	// Try in-cluster config first, fallback to local kubeconfig for development
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		kubeconfig := os.Getenv("KUBECONFIG")
+		if kubeconfig == "" {
+			kubeconfig = filepath.Join(os.Getenv("HOME"), ".kube", "config")
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			slog.Error("Failed to build k8s config", "error", err)
+			return
+		}
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		slog.Error("Failed to create k8s clientset", "error", err)
+		return
+	}
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	var mu sync.Mutex
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			stat, err := os.Stat(filepath)
+			// List services across all namespaces with label 'probe=true'
+			services, err := clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{
+				LabelSelector: "probe=true",
+			})
 			if err != nil {
-				slog.Error("Failed to stat targets file", "file", filepath, "error", err)
+				slog.Error("Failed to list k8s services", "error", err)
 				continue
 			}
 
-			if stat.ModTime().After(lastModTime) {
-				lastModTime = stat.ModTime()
-				slog.Info("Targets file modification detected, synchronization triggered", "file", filepath)
-
-				newTargets, err := readTargets(filepath)
-				if err != nil {
-					slog.Error("Failed to read targets during live reload", "file", filepath, "error", err)
-					continue
+			var discoveredTargets []string
+			for _, svc := range services.Items {
+				probePath := "/status/200"
+				if pathAnnot, ok := svc.Annotations["probe/path"]; ok && pathAnnot != "" {
+					probePath = pathAnnot
 				}
 
-				mu.Lock()
-				for target, cancelFunc := range activeSchedulers {
-					if !contains(newTargets, target) {
-						slog.Info("Target missing from new config, cancelling scheduler", "target", target)
-						cancelFunc()
-						delete(activeSchedulers, target)
-					}
+				for _, port := range svc.Spec.Ports {
+					targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svc.Name, svc.Namespace, port.Port, probePath)
+					discoveredTargets = append(discoveredTargets, targetURL)
 				}
-
-				for _, target := range newTargets {
-					if _, exists := activeSchedulers[target]; !exists {
-						slog.Info("New target found, allocating scheduler", "target", target)
-
-						schedCtx, schedCancel := context.WithCancel(ctx)
-						activeSchedulers[target] = schedCancel
-
-						wg.Add(1)
-						go targetScheduler(schedCtx, target, jobs, interval, wg)
-					}
-				}
-				mu.Unlock()
 			}
+
+			mu.Lock()
+			for target, cancelFunc := range activeSchedulers {
+				if !contains(discoveredTargets, target) {
+					slog.Info("Target service removed, stopping scheduler", "target", target)
+					cancelFunc()
+					delete(activeSchedulers, target)
+				}
+			}
+
+			for _, target := range discoveredTargets {
+				if _, exists := activeSchedulers[target]; !exists {
+					slog.Info("New K8s service discovered, allocating scheduler", "target", target)
+					schedCtx, schedCancel := context.WithCancel(ctx)
+					activeSchedulers[target] = schedCancel
+
+					wg.Add(1)
+					go targetScheduler(schedCtx, target, jobs, interval, wg)
+				}
+			}
+			mu.Unlock()
 		}
 	}
 }
@@ -317,7 +348,6 @@ func contains(slice []string, key string) bool {
 	return false
 }
 
-// getEnvAsInt reads an environment variable and falls back to a default if missing or invalid
 func getEnvAsInt(name string, defaultVal int) int {
 	valStr := os.Getenv(name)
 	if valStr == "" {
@@ -325,7 +355,6 @@ func getEnvAsInt(name string, defaultVal int) int {
 	}
 	val, err := strconv.Atoi(valStr)
 	if err != nil {
-		slog.Warn("Invalid integer for environment variable, using default", "env", name, "default", defaultVal, "error", err)
 		return defaultVal
 	}
 	return val
@@ -335,9 +364,6 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	targetsFile := "targets.csv"
-
-	// Parse environment variables for scale configuration
 	numWorkers := getEnvAsInt("WORKERS", 50)
 	jobQueueSize := getEnvAsInt("QUEUE_SIZE", 10000)
 	maxIdleConns := getEnvAsInt("MAX_IDLE_CONNS", 1000)
@@ -346,15 +372,6 @@ func main() {
 	httpTimeoutSeconds := getEnvAsInt("HTTP_TIMEOUT_SECONDS", 5)
 
 	probeInterval := time.Duration(probeIntervalSeconds) * time.Second
-
-	slog.Info("Starting api-prober with configuration",
-		"workers", numWorkers,
-		"queue_size", jobQueueSize,
-		"max_idle_conns", maxIdleConns,
-		"max_idle_conns_per_host", maxIdleConnsPerHost,
-		"probe_interval", probeInterval,
-		"http_timeout_seconds", httpTimeoutSeconds,
-	)
 
 	client := &http.Client{
 		Timeout: time.Duration(httpTimeoutSeconds) * time.Second,
@@ -365,27 +382,24 @@ func main() {
 		},
 	}
 
-	// Setup root context listening for termination signals
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	var wg sync.WaitGroup
-	var mu sync.Mutex
 	activeSchedulers := make(map[string]context.CancelFunc)
-
 	jobs := make(chan Job, jobQueueSize)
 
-	// Start worker pool
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go workerPool(ctx, jobs, client, &wg)
 	}
 
-	// Start target file watcher. Removed &mu.
-	go watchTargets(ctx, targetsFile, jobs, probeInterval, activeSchedulers, &mu, &wg)
+	wg.Add(1)
+	go watchK8sServices(ctx, jobs, probeInterval, activeSchedulers, &wg)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
+
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
@@ -396,216 +410,179 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
-
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("READY"))
 	})
 
-	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
-	}
+	srv := &http.Server{Addr: ":8080", Handler: mux}
 
-	// Start HTTP server in a separate goroutine
 	go func() {
-		slog.Info("Metric server starting on :8080/metrics")
+		slog.Info("Metric server starting on :8080")
 		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("HTTP server failed to run", "error", err)
 			os.Exit(1)
 		}
 	}()
 
-	// Block until context is canceled via shutdown signal
 	<-ctx.Done()
 	slog.Info("Received shutdown signal, initiating graceful termination...")
 
-	// Create shutdown context with a 5-second timeout for the HTTP server
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("HTTP server forced to shutdown", "error", err)
-	}
-
-	// Wait for all workers and schedulers to finish their current tasks
+	_ = srv.Shutdown(shutdownCtx)
 	wg.Wait()
 	slog.Info("api-prober stack components stopped cleanly. Goodbye.")
 }
 -e 
+
+=== ./vault-store.yaml ===
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: local-vault-store
+  namespace: default
+spec:
+  provider:
+    vault:
+      server: "http://vault-dev.default.svc.cluster.local:8200"
+      path: "secret"
+      version: "v2"
+      auth:
+        tokenSecretRef:
+          name: vault-token
+          key: token
+
+-e 
+
+=== ./.dockerignore ===
+.git
+.github
+bin/
+dist/
+api-prober
+*.out
+*.log-e 
 
 === ./main_test.go ===
 package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 )
 
 // English comments as preferred
-func TestReadTargets(t *testing.T) {
-	// Create a temporary directory for our test file that cleans up automatically
-	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "test_targets.csv")
 
-	// Define mock CSV content including comments and empty lines to test robustness
-	csvContent := `
-http://httpbin/status/200
-# This is a comment line and should be ignored
+func TestContains(t *testing.T) {
+	slice := []string{"http://service-a", "http://service-b", "http://service-c"}
 
-http://httpbin/delay/1
-  http://httpbin/status/500  
-`
-
-	// Write the mock content to the temporary file
-	err := os.WriteFile(tmpFile, []byte(csvContent), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create temporary test file: %v", err)
+	if !contains(slice, "http://service-b") {
+		t.Errorf("Expected slice to contain 'http://service-b'")
 	}
 
-	// Execute the actual function from main.go
-	targets, err := readTargets(tmpFile)
-	if err != nil {
-		t.Fatalf("readTargets returned an unexpected error: %v", err)
-	}
-
-	// Define what we strictly expect to see parsed
-	expected := []string{
-		"http://httpbin/status/200",
-		"http://httpbin/delay/1",
-		"http://httpbin/status/500",
-	}
-
-	// Validate the length of the parsed slice
-	if len(targets) != len(expected) {
-		t.Fatalf("Expected %d targets, but got %d", len(expected), len(targets))
-	}
-
-	// Validate the exact content and trimming mechanisms
-	for i, url := range targets {
-		if url != expected[i] {
-			t.Errorf("At index %d: expected %q, but got %q", i, expected[i], url)
-		}
+	if contains(slice, "http://service-d") {
+		t.Errorf("Did not expect slice to contain 'http://service-d'")
 	}
 }
 
-func TestReadTargets_FileNotFound(t *testing.T) {
-	// Execute the function with a file path that definitely does not exist
-	_, err := readTargets("non_existent_file.csv")
+func TestGetEnvAsInt(t *testing.T) {
+	envKey := "TEST_WORKERS_COUNT"
+	defaultVal := 50
 
-	// We strictly expect an error here
-	if err == nil {
-		t.Fatal("Expected an error when reading a non-existent file, but got nil")
+	// Test default value when env is empty
+	os.Unsetenv(envKey)
+	if val := getEnvAsInt(envKey, defaultVal); val != defaultVal {
+		t.Errorf("Expected default value %d, got %d", defaultVal, val)
 	}
+
+	// Test valid integer input
+	os.Setenv(envKey, "100")
+	if val := getEnvAsInt(envKey, defaultVal); val != 100 {
+		t.Errorf("Expected 100, got %d", val)
+	}
+
+	// Test invalid integer fallback
+	os.Setenv(envKey, "invalid_number")
+	if val := getEnvAsInt(envKey, defaultVal); val != defaultVal {
+		t.Errorf("Expected fallback to default value %d on invalid input, got %d", defaultVal, val)
+	}
+
+	os.Unsetenv(envKey)
 }
 
-func TestWatchTargets_Integration(t *testing.T) {
-	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "targets.csv")
+func TestProbeTarget_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
 
-	// Write initial target
-	err := os.WriteFile(tmpFile, []byte("http://target1\n"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to write initial targets: %v", err)
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
+	client := server.Client()
+
+	// Perform probe on successful endpoint
+	probeTarget(ctx, server.URL, client)
+}
+
+func TestProbeTarget_Non2xxStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	client := server.Client()
+
+	// Perform probe on failing endpoint
+	probeTarget(ctx, server.URL, client)
+}
+
+func TestTargetScheduler(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	jobs := make(chan Job, 10)
-	activeSchedulers := make(map[string]context.CancelFunc)
-	var mu sync.Mutex
+	interval := 50 * time.Millisecond
+	target := "http://test-target.svc.cluster.local"
+
 	var wg sync.WaitGroup
+	wg.Add(1)
 
-	// Run watchTargets in the background with the mutex
-	go watchTargets(ctx, tmpFile, jobs, 1*time.Second, activeSchedulers, &mu, &wg)
+	go targetScheduler(ctx, target, jobs, interval, &wg)
 
-	time.Sleep(6 * time.Second)
-
-	mu.Lock()
-	if len(activeSchedulers) != 1 {
-		t.Errorf("Expected 1 active scheduler, got %d", len(activeSchedulers))
-	}
-	mu.Unlock()
-
-	err = os.WriteFile(tmpFile, []byte("http://target2\n"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to modify targets: %v", err)
+	// Verify immediate first execution
+	select {
+	case job := <-jobs:
+		if job.Target != target {
+			t.Errorf("Expected target %s, got %s", target, job.Target)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Timeout waiting for initial scheduled job")
 	}
 
-	time.Sleep(6 * time.Second)
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(activeSchedulers) != 1 {
-		t.Errorf("Expected exactly 1 active scheduler after modification, got %d", len(activeSchedulers))
+	// Verify subsequent tick execution
+	select {
+	case job := <-jobs:
+		if job.Target != target {
+			t.Errorf("Expected target %s, got %s", target, job.Target)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Timeout waiting for second scheduled job tick")
 	}
 
-	if _, exists := activeSchedulers["http://target2"]; !exists {
-		t.Errorf("Expected target2 to be scheduled")
-	}
-
-	if _, exists := activeSchedulers["http://target1"]; exists {
-		t.Errorf("Expected target1 scheduler to be cancelled and removed")
-	}
+	cancel()
+	wg.Wait()
 }
--e 
-
-=== ./certs/tls.crt ===
------BEGIN CERTIFICATE-----
-MIIDIzCCAgugAwIBAgIUFrMl1N91rilF70yTAWIrcSQXpxkwDQYJKoZIhvcNAQEL
-BQAwITELMAkGA1UEBhMCREUxEjAQBgNVBAMMCWxvY2FsaG9zdDAeFw0yNjA3MjMw
-NDU2MDJaFw0yNzA3MjMwNDU2MDJaMCExCzAJBgNVBAYTAkRFMRIwEAYDVQQDDAls
-b2NhbGhvc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCL4khoTOYZ
-xA7jeJEreYTxzDigvrqo98i8CcpDFcfvH5/+K/JFWJ1cr1gAtfayMz/I/RRaBlgN
-Cn+hx9bR/TbrWliuRCveo7kBaHPjco0MxeQ77C2wpGaD0RRK9asHkBIAFmNjmzzA
-9y9mpMvc4rkWMYWyaPrvUpYQe9arRifp9rDwtrkSBvsRM1/psttuqiCV31B4R0Gi
-1lIqcwMWKW1Ry20O1KLzBNYLRf7tCWmAcKp+j4C19xgUpopwJFPA+jp/8u3Ws8/M
-Ao9SiKgG/j/yUWucPNUXI8NWwxbDUANw8pUNusdC8goQd74NBvpc/0Wfx1Jessli
-b51LiHBTQMPtAgMBAAGjUzBRMB0GA1UdDgQWBBQ2unrRT46ztIo4Maru7747yCIf
-ejAfBgNVHSMEGDAWgBQ2unrRT46ztIo4Maru7747yCIfejAPBgNVHRMBAf8EBTAD
-AQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBXqYKIUZANVY8P823sFr3/qpgNpGWsOS9v
-PIwto5bwUEPM35aHCJKqqR3R9QZojsQYO6Ku3f6GiClfXC2eirq0hJJf06iaayIs
-cIEuMTG85isKCv7SGKVqsOKWnxl5gPbdV4V663NQ+Ss4pjvtXfmvv4Fnle7+rhFJ
-Gf6LCJlm0Z3Y3GyteQZplNACcM7+t1xICMg0GQNpwLM5rlMiS74tqgbRkmSto5Wd
-NKXOiHJpwAGP7cuTinCIPpGdjX1GnsxjccoT8wPLcmn9MNC8zEvHX1/oAPj319mF
-xHso3Hv2mp+Wmvo04prMYibwsC88RnMcQ2V4nWMBU9n6kPDnEaa5
------END CERTIFICATE-----
--e 
-
-=== ./certs/tls.key ===
------BEGIN PRIVATE KEY-----
-MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCL4khoTOYZxA7j
-eJEreYTxzDigvrqo98i8CcpDFcfvH5/+K/JFWJ1cr1gAtfayMz/I/RRaBlgNCn+h
-x9bR/TbrWliuRCveo7kBaHPjco0MxeQ77C2wpGaD0RRK9asHkBIAFmNjmzzA9y9m
-pMvc4rkWMYWyaPrvUpYQe9arRifp9rDwtrkSBvsRM1/psttuqiCV31B4R0Gi1lIq
-cwMWKW1Ry20O1KLzBNYLRf7tCWmAcKp+j4C19xgUpopwJFPA+jp/8u3Ws8/MAo9S
-iKgG/j/yUWucPNUXI8NWwxbDUANw8pUNusdC8goQd74NBvpc/0Wfx1Jesslib51L
-iHBTQMPtAgMBAAECggEAIsogJnqLlrhlWIr9ldGm8AkRw160Jz5a6PNJX8Zcv3q+
-zJTK8BbCKlE8oo6e4IJw+HCC3YHq57Fm/UopgffHLyD84bh4LarL4g8DlXuBm33j
-DcknMuGsUlfPQ3ZWdy7MX0OyK81pvncrjYxqXFDx5dRiszS7Rgak5kwaX2X3Gs9+
-yzKAiVVVZ6vRMu2bftmOLHgCEwxkGbUw49QqZaek2AJwXibiyJglJDDp48dlErbx
-Tk+0N66dHs+Pw9/jIaaDQgQyzwGTBlxFh4eBOkmrCcYwBihxjAozoAYwnVbsvg7y
-Hff80AWU/B34fm+D+vSHsTk3O6Y6jytXiijitvW+mQKBgQDFZgR2yzBiuZslJYNC
-it505HYYFtW+Qr56usr34qvldPpEcaiWtnxGhMQZwiycBHUD4N7PYgmb44lPxMp1
-jRj6bD/Jgh5SwCEOR2aD/pJ9x0ELGN1/nmPadSRiKkJrCT3E/1/9PvWtiXnxXgLE
-F3bSVhTHWr4nIYQV3N5bsMEh2QKBgQC1aT7Ha88SbT4Bz8i6+hsCqXr9vZCj/+ZL
-by8yRPF6aGLZB2u60s3WUekGaR0ZN9VXzlAKORmichKFL0f2d9yyaf2Vm8U5IjXj
-OfH+Pza7pajRLzD9SAhnOAPZ+3C5WGTIYIcvrpOu4kDUABSFNCxr1M8gCdWSSS7d
-w/tbxE+SNQKBgQCLvtlSMC6k9bk75v6x0RYDsulXzHKtKxsmT675JmODIfk7EyvC
-5pW8ZqldgvWJzi34/O0/66vZzI+dBTg/WBBi2NeflJpbAuFj9nBA6axTlwgZDxVg
-D4WpVlzXkgtLM1OjbxdJdZT/sd++XEug/uuDpKU5LKiJk1SrFZ3lU5CmoQKBgQCe
-LnPwPWAkyB6OQ9jauKR+sLsur3GEnuj3E67KnXUV8Blo9mCIWbHj1C5lSZh22cls
-M9h04Y8pp1/gw/Zywdcttt/H6TiSdfMY+/i3YfVer7dBF24XHA0/u4cYNnf3FU1j
-r0+RUx8xGdW/RYafE3w8ViZ44DpawPddpbryLH3ZlQKBgDs5Rkb3RNNHHLnj4nUi
-7pNEjumbh36PQGN5VZZaAsxgzpo1DedzSwRTH/G5eeXPQAjE3W8ADNX+caAO+uXK
-mahhuJLHsbRV2m/oB+Q0GtU3jn3tNHa5MTWT4thj/VbgG3fBIwXPJCr2XuY5dECe
-MlInJ84IKRgcj902kwRifaHP
------END PRIVATE KEY-----
 -e 
 
 === ./Dockerfile ===
@@ -638,36 +615,33 @@ CMD ["./api-prober"]-e
 === ./.github/workflows/build-and-push.yml ===
 name: Build and Push Docker Image
 
-# Trigger on push to the main branch
 on:
   push:
     branches:
       - main
+    paths:
+      - '**'
+      - '!**.md'
+      - '!docs/**'
 
 env:
   REGISTRY: ghcr.io
-  # Converts repository name to lowercase automatically
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    
-    # Grant permissions to write packages to GitHub Container Registry
     permissions:
       contents: read
       packages: write
 
     steps:
-      # Checkout the current repository code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Set up Docker Buildx 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Authenticate against GitHub Container Registry using the automatic token
       - name: Log in to the Container registry
         uses: docker/login-action@v3
         with:
@@ -675,7 +649,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Automatically generate tags based on the git commit hash
       - name: Extract metadata for Docker
         id: meta
         uses: docker/metadata-action@v5
@@ -685,15 +658,13 @@ jobs:
             type=sha,format=long
             type=raw,value=latest
 
-      # Build the Go application and push the image to the registry
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
--e 
+          labels: ${{ steps.meta.outputs.labels }}-e 
 
 === ./.github/workflows/ci.yml ===
 name: CI
@@ -733,61 +704,246 @@ jobs:
         run: go build -v ./...-e 
 
 === ./Makefile ===
-.PHONY: help docker-build helm-install helm-upgrade helm-uninstall deploy
+-include .env
+export
+
+.PHONY: help k3d-up vault-up docker-build eso-install vault-secrets prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset vault-down k3d-down clean forward-all stop-forward test
 .DEFAULT_GOAL := help
 
-# Container registry configuration for Retail Edge
+# Container registry configuration
 IMAGE_REPO=ghcr.io/demirdilek/api-prober
-IMAGE_TAG=latest
+IMAGE_TAG=dev
 
 # Helm variables
 RELEASE_NAME=api-prober
 CHART_DIR=./helm/api-prober
 
+# Vault Docker settings for local dev
+VAULT_CONTAINER_NAME=vault-dev-server
+VAULT_DEV_TOKEN=myroottoken
+
 help: ## Show this help message
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-docker-build: ## Build the docker image locally (only needed for local testing)
+k3d-up: ## 1. Create a local k3d Kubernetes cluster
+	@if k3d cluster list | grep -q "mycluster"; then \
+		echo "Cluster 'mycluster' already exists."; \
+	else \
+		k3d cluster create mycluster --api-port 6443 -p "80:80@loadbalancer" -p "443:443@loadbalancer" --agents 2; \
+	fi
+
+vault-up: ## 2. Start local HashiCorp Vault container & seed secrets
+	@if docker ps | grep -q "$(VAULT_CONTAINER_NAME)"; then \
+		echo "Vault container already running."; \
+	else \
+		echo "Starting local HashiCorp Vault..."; \
+		docker run -d --name $(VAULT_CONTAINER_NAME) \
+			-p 8200:8200 \
+			-e VAULT_DEV_ROOT_TOKEN_ID=$(VAULT_DEV_TOKEN) \
+			hashicorp/vault:latest; \
+		echo "Waiting for Vault to initialize..."; \
+		sleep 4; \
+		docker exec -e VAULT_ADDR='http://127.0.0.1:8200' $(VAULT_CONTAINER_NAME) \
+			vault kv put secret/pushover user_key="$(PUSHOVER_USER_KEY)" api_token="$(PUSHOVER_API_TOKEN)"; \
+		echo "Vault initialized and secrets seeded at secret/pushover!"; \
+	fi
+
+docker-build: ## 3. Build local Docker image and import into k3d
 	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
+	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
 
-helm-install: ## Install the application into the cluster
-	helm install $(RELEASE_NAME) $(CHART_DIR)
+eso-install: ## 4. Install External Secrets Operator
+	helm repo add external-secrets https://charts.external-secrets.io
+	helm repo update
+	@if ! helm status external-secrets > /dev/null 2>&1; then \
+		echo "Installing External Secrets Operator..."; \
+		helm install external-secrets external-secrets/external-secrets \
+			--set installCRDs=true \
+			--set webhook.create=false \
+			--set certController.create=false \
+			--wait; \
+		echo "Waiting for CRD registration in Kubernetes API server..."; \
+		until kubectl api-resources | grep -q "secretstores"; do sleep 1; done; \
+	else \
+		echo "External Secrets Operator already installed."; \
+	fi
 
-helm-upgrade: ## Upgrade the existing release (pulls the new image from ghcr.io)
+vault-secrets: ## 5. Connect Vault to k3d & sync Kubernetes secrets via ESO
+	@sleep 3
+	kubectl apply -f vault-external.yaml || true
+	kubectl create secret generic vault-token --from-literal=token=$(VAULT_DEV_TOKEN) --dry-run=client -o yaml | kubectl apply -f -
+	kubectl apply -f vault-store.yaml
+	kubectl apply -f externalsecret.yaml
+
+prometheus-install: ## 6. Install kube-prometheus-stack via Helm
+	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+	helm repo update
+	@if ! helm status prom-stack > /dev/null 2>&1; then \
+		helm install prom-stack prometheus-community/kube-prometheus-stack -f prom-stack-values.yaml; \
+	else \
+		echo "Prometheus stack already installed."; \
+	fi
+
+helm-install: ## 7. Deploy application Helm chart (api-prober)
+	helm upgrade --install $(RELEASE_NAME) $(CHART_DIR)
+
+local-deploy: ## 8. Build fresh without cache, import to k3d, and restart deployment
+	docker build --no-cache -t $(IMAGE_REPO):$(IMAGE_TAG) .
+	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
+	kubectl rollout restart deployment $(RELEASE_NAME)
+
+hard-reset: ## 9. Deep clean docker system, delete cluster, and rebuild everything fresh
+	docker system prune -a --volumes -f
+	$(MAKE) clean
+	$(MAKE) all
+
+all: k3d-up vault-up docker-build eso-install vault-secrets prometheus-install helm-install ## [OUT-OF-THE-BOX] Spin up entire stack from scratch
+	@echo "========================================================="
+	@echo " api-prober stack is fully up and running out-of-the-box! "
+	@echo "========================================================="
+
+helm-upgrade: ## Upgrade existing api-prober Helm release
 	helm upgrade $(RELEASE_NAME) $(CHART_DIR)
 
-helm-uninstall: ## Completely remove the application from the cluster
-	helm uninstall $(RELEASE_NAME)
+helm-uninstall: ## Remove api-prober Helm release
+	helm uninstall $(RELEASE_NAME) || true
 
-deploy: helm-upgrade ## Shortcut to deploy updates from the registry-e 
+vault-down: ## Stop and remove Vault container
+	@docker stop $(VAULT_CONTAINER_NAME) || true
+	@docker rm $(VAULT_CONTAINER_NAME) || true
 
-=== ./targets.csv ===
-http://httpbin/delay/1
-http://httpbin/status/200
-http://httpbin/status/500
-http://httpbin/status/402-e 
+k3d-down: vault-down ## Delete local k3d cluster & stop Vault
+	k3d cluster delete mycluster || true
+
+clean: k3d-down ## Clean up cluster, containers and temporary files
+	rm -f project-dump.txt
+
+forward-all: ## Start background port-forwarding (Prometheus :9090 | Grafana :3000)
+	@echo "Starting Prometheus port-forward on :9090..."
+	@kubectl port-forward svc/prom-stack-kube-prometheus-prometheus 9090:9090 > /dev/null 2>&1 & echo $$! > .prom.pid
+	@echo "Starting Grafana port-forward on :3000..."
+	@kubectl port-forward svc/prom-stack-grafana 3000:80 > /dev/null 2>&1 & echo $$! > .grafana.pid
+	@echo "Port-forwarding active! Prometheus: http://localhost:9090 | Grafana: http://localhost:3000"
+	@PASSWORD=$$(kubectl get secret prom-stack-grafana -o jsonpath="{.data.admin-password}" | base64 --decode); \
+	echo "Grafana Login -> User: admin | Password: $$PASSWORD"
+
+stop-forward: ## Stop background port-forwarding
+	@if [ -f .prom.pid ]; then kill $$(cat .prom.pid) 2>/dev/null || true; rm .prom.pid; fi
+	@if [ -f .grafana.pid ]; then kill $$(cat .grafana.pid) 2>/dev/null || true; rm .grafana.pid; fi
+	@echo "Stopped port-forwarding."
+
+test: ## Run unit and integration tests
+	go test -v -race ./...-e 
+
+=== ./prom-stack-values.yaml ===
+# prom-stack-values.yaml
+# Deaktiviert den Node-Exporter, da er in K3d oft fehlschlägt
+nodeExporter:
+  enabled: false
+
+# Pro-Tipp für K3d: Diese drei K8s-internen Komponenten sind in K3d 
+# nach außen hin oft nicht scrape-bar und werfen früher oder später ebenfalls TargetDown-Alarme.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+grafana:
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+  grafana.ini:
+    dashboards:
+      # Force Grafana to use the dashboard as the default home screen
+      default_home_dashboard_path: "/tmp/dashboards/api_prober_dashboard.json"
+
+alertmanager:
+  alertmanagerSpec:
+    secrets:
+      - pushover-credentials
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: pushover
+      group_by: ['alertname', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      routes:
+        # Intercept the Watchdog alert and send it to the null receiver
+        - matchers:
+            - alertname = Watchdog
+          receiver: 'null'
+    receivers:
+      - name: pushover
+        pushover_configs:
+          # Mount secrets directly from the filesystem injected by External Secrets Operator
+          - user_key_file: /etc/alertmanager/secrets/pushover-credentials/USER_KEY
+            token_file: /etc/alertmanager/secrets/pushover-credentials/APP_TOKEN
+            send_resolved: true
+      - name: 'null'-e 
 
 === ./go.mod ===
 module github.com/demirdilek/api-prober
 
 go 1.26.1
 
-require github.com/prometheus/client_golang v1.23.2
+require (
+	github.com/prometheus/client_golang v1.23.2
+	k8s.io/apimachinery v0.36.3
+	k8s.io/client-go v0.36.3
+)
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/kr/text v0.2.0 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-openapi/jsonpointer v0.21.0 // indirect
+	github.com/go-openapi/jsonreference v0.20.2 // indirect
+	github.com/go-openapi/swag v0.23.0 // indirect
+	github.com/google/gnostic-models v0.7.0 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/josharian/intern v1.0.0 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/mailru/easyjson v0.7.7 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
-	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/sys v0.35.0 // indirect
-	google.golang.org/protobuf v1.36.8 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
+	go.yaml.in/yaml/v2 v2.4.3 // indirect
+	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/net v0.49.0 // indirect
+	golang.org/x/oauth2 v0.34.0 // indirect
+	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/term v0.39.0 // indirect
+	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/time v0.14.0 // indirect
+	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
+	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
+	gopkg.in/inf.v0 v0.9.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+	k8s.io/api v0.36.3 // indirect
+	k8s.io/klog/v2 v2.140.0 // indirect
+	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
+	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2 // indirect
+	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
+	sigs.k8s.io/randfill v1.0.0 // indirect
+	sigs.k8s.io/structured-merge-diff/v6 v6.3.3 // indirect
+	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 -e 
 
@@ -797,22 +953,59 @@ github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6r
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
-github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
+github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/emicklei/go-restful/v3 v3.13.0 h1:C4Bl2xDndpU6nJ4bc1jXd+uTmYPVUwkD6bFY/oTyCes=
+github.com/emicklei/go-restful/v3 v3.13.0/go.mod h1:6n3XBCmQQb25CM2LCACGz8ukIrRry+4bhvbpWn3mrbc=
+github.com/fxamacker/cbor/v2 v2.9.0 h1:NpKPmjDBgUfBms6tr6JZkTHtfFGcMKsw3eGcmD/sapM=
+github.com/fxamacker/cbor/v2 v2.9.0/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
+github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=
+github.com/go-logr/logr v1.4.3/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
+github.com/go-openapi/jsonpointer v0.19.6/go.mod h1:osyAmYz/mB/C3I+WsTTSgw1ONzaLJoLCyoi6/zppojs=
+github.com/go-openapi/jsonpointer v0.21.0 h1:YgdVicSA9vH5RiHs9TZW5oyafXZFc6+2Vc1rr/O9oNQ=
+github.com/go-openapi/jsonpointer v0.21.0/go.mod h1:IUyH9l/+uyhIYQ/PXVA41Rexl+kOkAPDdXEYns6fzUY=
+github.com/go-openapi/jsonreference v0.20.2 h1:3sVjiK66+uXK/6oQ8xgcRKcFgQ5KXa2KvnJRumpMGbE=
+github.com/go-openapi/jsonreference v0.20.2/go.mod h1:Bl1zwGIM8/wsvqjsOQLJ/SH+En5Ap4rVB5KVcIDZG2k=
+github.com/go-openapi/swag v0.22.3/go.mod h1:UzaqsxGiab7freDnrUUra0MwWfN/q7tE4j+VcZ0yl14=
+github.com/go-openapi/swag v0.23.0 h1:vsEVJDUo2hPJ2tu0/Xc+4noaxyEffXNIs3cOULZ+GrE=
+github.com/go-openapi/swag v0.23.0/go.mod h1:esZ8ITTYEsH1V2trKHjAN8Ai7xHb8RV+YSZ577vPjgQ=
+github.com/google/gnostic-models v0.7.0 h1:qwTtogB15McXDaNqTZdzPJRHvaVJlAl+HVQnLmJEJxo=
+github.com/google/gnostic-models v0.7.0/go.mod h1:whL5G0m6dmc5cPxKc5bdKdEN3UjI7OUGxBlw57miDrQ=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/google/gofuzz v1.0.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/josharian/intern v1.0.0 h1:vlS4z54oSdjm0bgjRigI+G1HpF+tI+9rE5LLzOg8HmY=
+github.com/josharian/intern v1.0.0/go.mod h1:5DoeVV0s6jJacbCEi61lwdGj/aVlrQvzHFFd8Hwg//Y=
+github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=
+github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
 github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
 github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
+github.com/kr/pretty v0.2.1/go.mod h1:ipq/a2n7PKx3OHsz4KJII5eveXtPO4qwEXGdVfWzfnI=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
 github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
+github.com/kr/pty v1.1.1/go.mod h1:pFQYn66WHrOpPYNljwOMqo10TkYh1fy3cYio2l3bCsQ=
+github.com/kr/text v0.1.0/go.mod h1:4Jbv+DJW3UT/LiOwJeYQe1efqtUx/iVham/4vfdArNI=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
 github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
 github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
+github.com/mailru/easyjson v0.7.7 h1:UGYAvKxe3sBsEDzO8ZeWOSlIQfWFlxbzLZe7hwFURr0=
+github.com/mailru/easyjson v0.7.7/go.mod h1:xzfreul335JAWq5oZzymOObrkdz5UnU4kGfJJLY9Nlc=
+github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
+github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd h1:TRLaZ9cD/w8PVh93nsPXa1VrQ6jlwL5oN8l14QlcNfg=
+github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
+github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
+github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee h1:W5t00kpgFdJifH4BDsTlE89Zl93FEloxaWZfGcifgq8=
+github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
-github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
+github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/prometheus/client_golang v1.23.2 h1:Je96obch5RDVy3FDMndoUsjAhG5Edi49h0RJWRi/o0o=
 github.com/prometheus/client_golang v1.23.2/go.mod h1:Tb1a6LWHB3/SPIzCoaDXI4I8UHKeFTEQ1YCr+0Gyqmg=
 github.com/prometheus/client_model v0.6.2 h1:oBsgwpGs7iVziMvrGhE53c/GrLUsZdHnqNwqPLxwZyk=
@@ -821,29 +1014,83 @@ github.com/prometheus/common v0.66.1 h1:h5E0h5/Y8niHc5DlaLlWLArTQI7tMrsfQjHV+d9Z
 github.com/prometheus/common v0.66.1/go.mod h1:gcaUsgf3KfRSwHY4dIMXLPV0K/Wg1oZ8+SbZk/HH/dA=
 github.com/prometheus/procfs v0.16.1 h1:hZ15bTNuirocR6u0JZ6BAHHmwS1p8B4P6MRqxtzMyRg=
 github.com/prometheus/procfs v0.16.1/go.mod h1:teAbpZRB1iIAJYREa1LsoWUXykVXA1KlTmWl8x/U+Is=
-github.com/rogpeppe/go-internal v1.10.0 h1:TMyTOH3F/DB16zRVcYyreMH6GnZZrwQVAoYjRBZyWFQ=
-github.com/rogpeppe/go-internal v1.10.0/go.mod h1:UQnix2H7Ngw/k4C5ijL5+65zddjncjaFoBhdsK/akog=
+github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
+github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
+github.com/spf13/pflag v1.0.9 h1:9exaQaMOCwffKiiiYk6/BndUBv+iRViNW+4lEMi0PvY=
+github.com/spf13/pflag v1.0.9/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
+github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
+github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
+github.com/stretchr/objx v0.5.2 h1:xuMeJ0Sdp5ZMRXx/aWO6RZxdr3beISkG5/G/aIRr3pY=
+github.com/stretchr/objx v0.5.2/go.mod h1:FRsXN1f5AsAjCGJKqEizvkpNtU+EGNCLh3NxZ/8L+MA=
+github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
+github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
+github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
+github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
+github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
 go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
-go.yaml.in/yaml/v2 v2.4.2 h1:DzmwEr2rDGHl7lsFgAHxmNz/1NlQ7xLIrlN2h5d1eGI=
-go.yaml.in/yaml/v2 v2.4.2/go.mod h1:081UH+NErpNdqlCXm3TtEran0rJZGxAYx9hb/ELlsPU=
-golang.org/x/sys v0.35.0 h1:vz1N37gP5bs89s7He8XuIYXpyY0+QlsKmzipCbUtyxI=
-golang.org/x/sys v0.35.0/go.mod h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=
-google.golang.org/protobuf v1.36.8 h1:xHScyCOEuuwZEc6UtSOvPbAT4zRh0xcNRYekJwfqyMc=
-google.golang.org/protobuf v1.36.8/go.mod h1:fuxRtAxBytpl4zzqUh6/eyUujkJdNiuEkXntxiD/uRU=
+go.yaml.in/yaml/v2 v2.4.3 h1:6gvOSjQoTB3vt1l+CU+tSyi/HOjfOjRLJ4YwYZGwRO0=
+go.yaml.in/yaml/v2 v2.4.3/go.mod h1:zSxWcmIDjOzPXpjlTTbAsKokqkDNAVtZO0WOMiT90s8=
+go.yaml.in/yaml/v3 v3.0.4 h1:tfq32ie2Jv2UxXFdLJdh3jXuOzWiL1fo0bu/FbuKpbc=
+go.yaml.in/yaml/v3 v3.0.4/go.mod h1:DhzuOOF2ATzADvBadXxruRBLzYTpT36CKvDb3+aBEFg=
+golang.org/x/net v0.49.0 h1:eeHFmOGUTtaaPSGNmjBKpbng9MulQsJURQUAfUwY++o=
+golang.org/x/net v0.49.0/go.mod h1:/ysNB2EvaqvesRkuLAyjI1ycPZlQHM3q01F02UY/MV8=
+golang.org/x/oauth2 v0.34.0 h1:hqK/t4AKgbqWkdkcAeI8XLmbK+4m4G5YeQRrmiotGlw=
+golang.org/x/oauth2 v0.34.0/go.mod h1:lzm5WQJQwKZ3nwavOZ3IS5Aulzxi68dUSgRHujetwEA=
+golang.org/x/sys v0.40.0 h1:DBZZqJ2Rkml6QMQsZywtnjnnGvHza6BTfYFWY9kjEWQ=
+golang.org/x/sys v0.40.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
+golang.org/x/term v0.39.0 h1:RclSuaJf32jOqZz74CkPA9qFuVTX7vhLlpfj/IGWlqY=
+golang.org/x/term v0.39.0/go.mod h1:yxzUCTP/U+FzoxfdKmLaA0RV1WgE0VY7hXBwKtY/4ww=
+golang.org/x/text v0.33.0 h1:B3njUFyqtHDUI5jMn1YIr5B0IE2U0qck04r6d4KPAxE=
+golang.org/x/text v0.33.0/go.mod h1:LuMebE6+rBincTi9+xWTY8TztLzKHc/9C1uBCG27+q8=
+golang.org/x/time v0.14.0 h1:MRx4UaLrDotUKUdCIqzPC48t1Y9hANFKIRpNx+Te8PI=
+golang.org/x/time v0.14.0/go.mod h1:eL/Oa2bBBK0TkX57Fyni+NgnyQQN4LitPmob2Hjnqw4=
+google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af h1:+5/Sw3GsDNlEmu7TfklWKPdQ0Ykja5VEmq2i817+jbI=
+google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c h1:Hei/4ADfdWqJk1ZMxUNpqntNwaWcugrBjAiHlqqRiVk=
 gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c/go.mod h1:JHkPIbrfpd72SG/EVd6muEfDQjcINNoR0C8j2r3qZ4Q=
+gopkg.in/evanphx/json-patch.v4 v4.13.0 h1:czT3CmqEaQ1aanPc5SdlgQrrEIb8w/wwCvWWnfEbYzo=
+gopkg.in/evanphx/json-patch.v4 v4.13.0/go.mod h1:p8EYWUEYMpynmqDbY58zCKCFZw8pRWMG4EsWvDvM72M=
+gopkg.in/inf.v0 v0.9.1 h1:73M5CoZyi3ZLMOyDlQh031Cx6N9NDJ2Vvfl76EDAgDc=
+gopkg.in/inf.v0 v0.9.1/go.mod h1:cWUDdTG/fYaXco+Dcufb5Vnc6Gp2YChqWtbxRZE0mXw=
+gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+k8s.io/api v0.36.3 h1:NxB+05W2UGqXWFXcLO0RB5cnqnUPP5v5sVlaOH0Iz4w=
+k8s.io/api v0.36.3/go.mod h1:JzLQKqRHC5+I8RVj/lS3lCg0mg6nWI9Fo/Sk3ElxHzg=
+k8s.io/apimachinery v0.36.3 h1:PkzMRBRG8joFD8EhCuQAtNPvJlxb82FwplP26HIzvAM=
+k8s.io/apimachinery v0.36.3/go.mod h1:cTSjBWgPe/6CQyBKzY/hDIRWCQQQeK0mfLbml0UYFHE=
+k8s.io/client-go v0.36.3 h1:M4JdVzXxYcZk4fGpfDdYnxSwhLKWCFoQsHW6t+z8Hfg=
+k8s.io/client-go v0.36.3/go.mod h1:gcPwr0c87vjjG6HB6pWEqOeuYVoXSsREjzux2j6GF30=
+k8s.io/klog/v2 v2.140.0 h1:Tf+J3AH7xnUzZyVVXhTgGhEKnFqye14aadWv7bzXdzc=
+k8s.io/klog/v2 v2.140.0/go.mod h1:o+/RWfJ6PwpnFn7OyAG3QnO47BFsymfEfrz6XyYSSp0=
+k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a h1:xCeOEAOoGYl2jnJoHkC3hkbPJgdATINPMAxaynU2Ovg=
+k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a/go.mod h1:uGBT7iTA6c6MvqUvSXIaYZo9ukscABYi2btjhvgKGZ0=
+k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2 h1:AZYQSJemyQB5eRxqcPky+/7EdBj0xi3g0ZcxxJ7vbWU=
+k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2/go.mod h1:xDxuJ0whA3d0I4mf/C4ppKHxXynQ+fxnkmQH0vTHnuk=
+sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 h1:IpInykpT6ceI+QxKBbEflcR5EXP7sU1kvOlxwZh5txg=
+sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730/go.mod h1:mdzfpAEoE6DHQEN0uh9ZbOCuHbLK5wOm7dK4ctXE9Tg=
+sigs.k8s.io/randfill v1.0.0 h1:JfjMILfT8A6RbawdsK2JXGBR5AQVfd+9TbzrlneTyrU=
+sigs.k8s.io/randfill v1.0.0/go.mod h1:XeLlZ/jmk4i1HRopwe7/aU3H5n1zNUcX6TM94b3QxOY=
+sigs.k8s.io/structured-merge-diff/v6 v6.3.3 h1:u08YRbVUi59ri4YD6cg0UqNM4Dimn0sIl+wldcx5PYw=
+sigs.k8s.io/structured-merge-diff/v6 v6.3.3/go.mod h1:M3W8sfWvn2HhQDIbGWj3S099YozAsymCo/wrT5ohRUE=
+sigs.k8s.io/yaml v1.6.0 h1:G8fkbMSAFqgEFgh4b1wmtzDnioxFCUgTZhlbj5P9QYs=
+sigs.k8s.io/yaml v1.6.0/go.mod h1:796bPqUfzR/0jLAl6XjHl3Ck7MiyVv8dbTdyT3/pMf4=
 -e 
 
 === ./.env.example ===
 # Pushover Credentials for Alertmanager
 PUSHOVER_USER_KEY=your_user_key_here
 PUSHOVER_API_TOKEN=your_api_token_here-e 
+
+=== ./.grafana.pid ===
+398062
+-e 
 
 === ./.gitignore ===
 # Binaries and preresults
@@ -920,17 +1167,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 -e 
 
-=== ./helm/api-prober/templates/configmap.yaml ===
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ .Release.Name }}-config
-data:
-  targets.csv: |
-{{ .Values.targets | indent 4 }}
-
--e 
-
 === ./helm/api-prober/templates/dashboard-configmap.yaml ===
 apiVersion: v1
 kind: ConfigMap
@@ -955,8 +1191,8 @@ spec:
       rules:
         # 1. Errors: High failure rate
         - alert: HighErrorRate
-          expr: api_prober_errors_total > 0
-          for: 0s
+          expr: increase(api_prober_errors_total[2m]) > 0
+          for: 1m
           labels:
             severity: critical
           annotations:
@@ -987,13 +1223,19 @@ spec:
           labels:
             severity: critical
           annotations:
-            summary: '{{`Traffic collapse on target {{ $labels.target }}`}}'-e 
+            summary: '{{`Traffic collapse on target {{ $labels.target }}`}}'
+
+-e 
 
 === ./helm/api-prober/templates/service.yaml ===
+# templates/service.yaml
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ .Release.Name }}
+  # The ServiceMonitor uses this label to discover the Service
+  labels:
+    app: {{ .Release.Name }}
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -1003,7 +1245,37 @@ spec:
       targetPort: 8080
       protocol: TCP
   selector:
-    app: {{ .Release.Name }}-e 
+    app: {{ .Release.Name }}
+
+-e 
+
+=== ./helm/api-prober/templates/rbac.yaml ===
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-service-discovery
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-service-discovery-binding
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-sa
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Release.Name }}-service-discovery
+  apiGroup: rbac.authorization.k8s.io-e 
 
 === ./helm/api-prober/templates/deployment.yaml ===
 apiVersion: apps/v1
@@ -1020,55 +1292,21 @@ spec:
       labels:
         app: {{ .Release.Name }}
     spec:
+      serviceAccountName: {{ .Release.Name }}-sa
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           ports:
             - containerPort: 8080
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-          volumeMounts:
-            - name: config-volume
-              mountPath: /app/targets.csv
-              subPath: targets.csv
-      volumes:
-        - name: config-volume
-          configMap:
-            name: {{ .Release.Name }}-config-e 
-
-=== ./helm/api-prober/templates/alertmanagerconfig.yaml ===
-apiVersion: monitoring.coreos.com/v1alpha1
-kind: AlertmanagerConfig
-metadata:
-  name: {{ .Release.Name }}-routing
-  labels:
-    release: prom-stack
-spec:
-  route:
-    groupBy: ['alertname', 'severity']
-    groupWait: 30s
-    groupInterval: 5m
-    repeatInterval: 12h
-    receiver: 'pushover-notifications'
-  receivers:
-  - name: 'pushover-notifications'
-    pushoverConfigs:
-    - token:
-        name: pushover-credentials
-        key: token
-      userKey:
-        name: pushover-credentials
-        key: user_key
-      sendResolved: true
-      # Go template syntax escaped for Helm
-      title: '{{`{{ .GroupLabels.alertname }}`}}'
-      message: '{{`{{ .CommonAnnotations.summary }}\n{{ .CommonAnnotations.description }}`}}'
-      priority: '{{`{{ if eq .GroupLabels.severity "critical" }}1{{ else }}0{{ end }}`}}'-e 
+            {{- toYaml .Values.resources | nindent 12 }}-e 
 
 === ./helm/api-prober/templates/servicemonitor.yaml ===
+# templates/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
+  # Use .Release.Name instead of the missing helper template
   name: {{ .Release.Name }}
   labels:
     # Strictly required for the Prometheus Operator to discover the target
@@ -1080,34 +1318,101 @@ spec:
   endpoints:
     - port: metrics
       interval: 2s
-      path: /metrics-e 
+      path: /metrics
+
+-e 
+
+=== ./helm/api-prober/templates/httpbin.yaml ===
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpbin
+  labels:
+    app: httpbin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: httpbin
+  template:
+    metadata:
+      labels:
+        app: httpbin
+    spec:
+      containers:
+        - name: httpbin
+          image: mccutchen/go-httpbin:v2.14.0
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: 50m
+              memory: 64Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+---
+# 1. Normaler Success Endpoint
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-success
+  labels:
+    app: httpbin
+    probe: "true"
+  annotations:
+    probe/path: "/status/200"
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: httpbin
+---
+# 2. Slow Endpoint (High Latency)
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-slow
+  labels:
+    app: httpbin
+    probe: "true"
+  annotations:
+    probe/path: "/delay/1"
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: httpbin-e 
 
 === ./helm/api-prober/values.yaml ===
 # Replica count for the prober
 replicaCount: 1
 
+# Image configuration for the prober
 image:
-  # Replace <your-github-username> with your actual GitHub name
   repository: ghcr.io/demirdilek/api-prober
-  pullPolicy: Always
-  tag: "latest"
+  pullPolicy: IfNotPresent
+  tag: "dev"
 
+# Service configuration for the prober
 service:
   type: ClusterIP
   port: 8080
 
-# CSV configuration injected directly into the ConfigMap
-targets: |
-  https://example.com,Example
-  https://api.example.com,API
-
+# Resource requests and limits for the prober container
 resources:
   limits:
     cpu: 100m
     memory: 128Mi
   requests:
     cpu: 10m
-    memory: 64Mi-e 
+    memory: 64Mi
+
+dashboards:
+  enabled: true
+  label: grafana_dashboard-e 
 
 === ./helm/api-prober/Chart.yaml ===
 apiVersion: v2
@@ -1194,5 +1499,60 @@ appVersion: "1.0.0"
   "timepicker": {},
   "timezone": "",
   "title": "api-prober - 4 Golden Signals",
-  "version": 2
+  "version": 2,
+  "uid": "api-prober-home"
 }
+-e 
+
+=== ./vault-external.yaml ===
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-dev
+  namespace: default
+spec:
+  ports:
+    - protocol: TCP
+      port: 8200
+      targetPort: 8200
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: vault-dev
+  namespace: default
+subsets:
+  - addresses:
+      - ip: "172.17.0.1" # Standard Docker bridge IP on Linux host
+    ports:
+      - port: 8200
+
+-e 
+
+=== ./.prom.pid ===
+398059
+-e 
+
+=== ./externalsecret.yaml ===
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pushover-credentials
+  namespace: default
+spec:
+  refreshInterval: "1h"
+  secretStoreRef:
+    name: local-vault-store
+    kind: SecretStore
+  target:
+    name: pushover-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: USER_KEY
+      remoteRef:
+        key: pushover
+        property: user_key
+    - secretKey: APP_TOKEN
+      remoteRef:
+        key: pushover
+        property: api_token

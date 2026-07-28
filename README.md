@@ -1,40 +1,36 @@
-[![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml)
-
 # api-prober
 
-A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation, for distributed edge environments.
+[![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation) for distributed edge environments.
 
 ## Features
 
-* **Dynamic Targets:** Monitored endpoints are dynamically loaded via `targets.csv`. A native background watcher applies updates on the fly, provisioning or gracefully terminating worker goroutines without requiring application restarts.
+* **Dynamic Targets:** Monitored endpoints are dynamically discovered via Kubernetes API annotations (`probe=true`). A native background watcher applies updates on the fly without requiring application restarts.
+* **Enterprise Secret Management:** Fully decoupled credential management using HashiCorp Vault and External Secrets Operator (ESO). Secrets are injected as secure file mounts, preventing environment variable leaks.
+* **Configuration as Code:** The entire Prometheus monitoring stack is configured declaratively via `prom-stack-values.yaml`, preparing the project for GitOps workflows.
+* **Fully Encapsulated Stack:** Self-contained environment featuring Go, Prometheus, Alertmanager, Grafana, HashiCorp Vault, and Httpbin.
 * **Multi-Stage & Multi-Arch Build:** Minimal Docker footprint supporting both `amd64` and `arm64` architectures.
-* **Fully Encapsulated Stack:** Self-contained environment featuring Go, Prometheus, Alertmanager, Grafana, and Httpbin.
-* **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down the HTTP metric server, active workers, and dynamic target schedulers without dropping in-flight probes.
-* **Configurable via Environment Variables:** Fully aligned with Twelve-Factor App principles.
-* **Automated CI/CD:** GitHub Actions pipeline ensuring clean builds and dependency caching.
+* **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down without dropping in-flight probes.
 
-## Architecture
+## Tech Stack & Architecture
 
-```text
-api-prober Architecture
-│
-├── Configuration Layer
-│   └── targets.csv (Dynamic target config via Helm ConfigMap)
-│
-├── Core Engine (Go)
-│   ├── watchTargets() (Polls targets.csv every 5s)
-│   ├── Dynamic Goroutines (Spawns/cancels per target via Context)
-│   └── Shared http.Client (Connection pooling & 5s timeouts)
-│
-├── External Endpoints
-│   └── Target APIs (Probed via HTTP GET)
-│
-└── Observability & Diagnostics Stack
-    ├── Structured Logs (JSON stdout via slog)
-    ├── Go HTTP Exporter (:8080) ──> Serves /metrics & /debug/pprof
-    ├── Prometheus ─────────> Scrapes /metrics every interval via ServiceMonitor
-    └── Grafana ──────────> Queries Prometheus via PromQL (Auto-provisioned dashboard)
-```
+* **Go (Golang):** Core microservice architecture featuring native API probing and Prometheus instrumentation.
+* **Kubernetes:** Dynamic service discovery utilizing Kubernetes API annotations.
+* **HashiCorp Vault:** Centralized and secure secrets management for sensitive credentials.
+* **External Secrets Operator (ESO):** Automated synchronization of secrets from HashiCorp Vault into native Kubernetes Secrets.
+* **Prometheus & Grafana:** Full observability stack measuring the 4 Golden Signals.
+* **Alertmanager & Pushover:** Real-time mobile alert notifications triggered by defined threshold violations.
+
+> **Secret Management Flow:**  
+> Sensitive credentials (e.g., Pushover User Key and App Token) are stored securely in HashiCorp Vault and synced directly into Kubernetes Secrets via the External Secrets Operator (ESO).
+
+### Vault Operational Status
+
+Verify that HashiCorp Vault is initialized and unsealed:
+
+![Vault Status](assets/vault-status.png)
 
 ## Getting Started
 
@@ -44,68 +40,90 @@ api-prober Architecture
 * k3d / Kubernetes
 * Helm
 * GNU Make
-* 1Password CLI (op) for secret management
+* HashiCorp Vault (runs locally in dev mode via Docker; no local CLI installation required)
 
-### Local Development & Testing
+## Local Cluster Lifecycle & Deployment
 
-Run unit and integration tests with the race detector enabled:
-
-```bash
-go test -v -race ./...
-```
-
-### Local Cluster Lifecycle & Helm Deployment
-
-You can manage the local development cluster and the Helm chart lifecycle using the provided `Makefile`:
+### You can manage the local development cluster and the entire stack lifecycle using the provided Makefile
 
 ```bash
-# 1. Create a local k3d Kubernetes cluster
-make k3d-up
+# Spin up the entire stack from scratch (k3d, Vault, Docker build, ESO, Prometheus, Helm deployment)
+make all
 
-# 2. Build the local Docker image and import it into k3d
-make docker-build
-k3d image import ghcr.io/demirdilek/api-prober:latest -c mycluster
+# Start background port-forwarding for Prometheus and Grafana
+make forward-all
 
-# 3. Install the Prometheus monitoring stack (if not already present)
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
-helm install prom-stack prometheus-community/kube-prometheus-stack
-
-# 4. Install the application into the cluster
-make helm-install
+# Run unit and integration tests with the race detector enabled
+make test
 ```
 
-## Kubernetes & Helm Configuration
+![Kubernetes Pods](assets/pods.png)
+![Slog Output](assets/slog-output.png)
 
-The application runs inside a Kubernetes cluster managed via k3d, paired with the kube-prometheus-stack Helm chart.
+## Observability & Dashboards
 
-* Chart Location: ./helm/api-prober
+Grafana is automatically provisioned via sidecar injection. The dashboard displays real-time metrics for Latency, Traffic, Errors, and Saturation.
 
-* Secret Management: Sensitive credentials—such as the Pushover token and user_key—are pulled securely at runtime from 1Password using the 1Password CLI (op read) and injected directly into Kubernetes Secrets.
+Once port-forwarding is active, access Grafana at  <http://localhost:3000>  The login credentials will be printed in your terminal by the Makefile.
 
-```bash
-kubectl create secret generic pushover-credentials \
-  --from-literal=user_key="$(op read 'op://vault/item/user_key')" \
-  --from-literal=token="$(op read 'op://vault/item/api_token')"
-```
-
-* Observability Stack: Includes Prometheus for scraping metrics via ServiceMonitor, Alertmanager with AlertmanagerConfig for Pushover notifications, and sidecar-provisioned Grafana dashboards.
+![Grafana Dashboard](assets/grafana-dashboard.png)
 
 ## Alerting & Escalation
 
 Real-time notifications are managed via Prometheus Alertmanager based on thresholds of the 4 Golden Signals.
 
+![Prometheus](assets/prometheus.png)
+
 ### Emergency Priority (iOS Silent Mode Bypass)
-Alerts are pre-configured with Priority 2 (Emergency). To ensure critical operational alerts break through your phone's silent switch or "Do Not Disturb" focus modes:
 
-* 1. Open Settings on your iOS device.
-* 2. Navigate to Pushover -> Notifications.
-* 3. Enable Allow Critical Alerts.
+Alerts are pre-configured to escalate critical issues. To ensure critical operational alerts break through your phone's silent switch or "Do Not Disturb" focus modes:
 
-### Simulating an Alert
-To verify the entire alerting pipeline from the edge to your phone, add a failing target to targets.csv:
+* Open Settings on your iOS device.
+* Navigate to Pushover -> Notifications.
+* Enable Allow Critical Alerts.
 
-Code-Snippet
-```text
-http://httpbin/status/500
+| Notification 1 | Notification 2 |
+| :---: | :---: |
+| ![Pushover 1](assets/pushover1.png) | ![Pushover 2](assets/pushover2.png) |
+
+## Simulating Alerts
+
+The setup allows you to simulate alerts for different Golden Signals:
+
+### 1. High Latency Alert
+
+The Helm chart automatically provisions a target called `httpbin-slow` which simulates delayed responses (`/delay/1`). Once Prometheus evaluates the high p99 latency threshold over the defined timeframe, Alertmanager will push a notification to your configured Pushover device.
+
+### 2. High Error Rate Alert (Dynamic Discovery)
+
+You can test the dynamic service discovery and error alerting by creating a custom target that returns HTTP 500 errors.
+
+Simply deploy a service with the `probe="true"` label and the `probe/path="/status/500"` annotation:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-error
+  labels:
+    app: httpbin
+    probe: "true"
+  annotations:
+    probe/path: "/status/500"
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: httpbin
+EOF
+```
+
+The Go engine will dynamically pick up the new endpoint within 5 seconds and start probing it. Shortly after, the HighErrorRate rule will fire in Prometheus and escalate to Alertmanager.
+
+To clean up and remove the failing endpoint once tested:
+
+```bash
+kubectl delete service httpbin-error
 ```

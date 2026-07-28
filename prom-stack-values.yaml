@@ -1,0 +1,50 @@
+# prom-stack-values.yaml
+# Deaktiviert den Node-Exporter, da er in K3d oft fehlschlägt
+nodeExporter:
+  enabled: false
+
+# Pro-Tipp für K3d: Diese drei K8s-internen Komponenten sind in K3d 
+# nach außen hin oft nicht scrape-bar und werfen früher oder später ebenfalls TargetDown-Alarme.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+grafana:
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+  grafana.ini:
+    dashboards:
+      # Force Grafana to use the dashboard as the default home screen
+      default_home_dashboard_path: "/tmp/dashboards/api_prober_dashboard.json"
+
+alertmanager:
+  alertmanagerSpec:
+    secrets:
+      - pushover-credentials
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: pushover
+      group_by: ['alertname', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      routes:
+        # Intercept the Watchdog alert and send it to the null receiver
+        - matchers:
+            - alertname = Watchdog
+          receiver: 'null'
+    receivers:
+      - name: pushover
+        pushover_configs:
+          # Mount secrets directly from the filesystem injected by External Secrets Operator
+          - user_key_file: /etc/alertmanager/secrets/pushover-credentials/USER_KEY
+            token_file: /etc/alertmanager/secrets/pushover-credentials/APP_TOKEN
+            send_resolved: true
+      - name: 'null'
