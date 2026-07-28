@@ -1,0 +1,19 @@
+# templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  # The ServiceMonitor uses this label to discover the Service
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    # Add this name mapping so the ServiceMonitor can bind to it
+    - name: metrics
+      port: {{ .Values.service.port }}
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: {{ .Release.Name }}
+

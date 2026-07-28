@@ -1,0 +1,18 @@
+# templates/servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  # Use .Release.Name instead of the missing helper template
+  name: {{ .Release.Name }}
+  labels:
+    # Strictly required for the Prometheus Operator to discover the target
+    release: prom-stack
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  endpoints:
+    - port: metrics
+      interval: 2s
+      path: /metrics
+

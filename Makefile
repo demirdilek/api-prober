@@ -1,12 +1,17 @@
 -include .env
 export
 
-.PHONY: help k3d-up vault-up docker-build eso-install vault-secrets prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset vault-down k3d-down clean forward-all stop-forward test
+.PHONY: help k3d-up vault-up docker-build eso-install vault-secrets prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset vault-down k3d-down clean forward-all stop-forward test iinstall-argocd apply-gitops argocd-pass
+
 .DEFAULT_GOAL := help
 
 # Container registry configuration
 IMAGE_REPO=ghcr.io/demirdilek/api-prober
 IMAGE_TAG=dev
+
+ARGOCD_MANIFEST_URL ?= https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+TAILSCALE_IP ?= $(shell tailscale ip -4 2>/dev/null || echo "localhost")
 
 # Helm variables
 RELEASE_NAME=api-prober
@@ -115,14 +120,30 @@ k3d-down: vault-down ## Delete local k3d cluster & stop Vault
 clean: k3d-down ## Clean up cluster, containers and temporary files
 	rm -f project-dump.txt
 
-forward-all: ## Start background port-forwarding (Prometheus :9090 | Grafana :3000)
-	@echo "Starting Prometheus port-forward on :9090..."
-	@kubectl port-forward svc/prom-stack-kube-prometheus-prometheus 9090:9090 > /dev/null 2>&1 & echo $$! > .prom.pid
-	@echo "Starting Grafana port-forward on :3000..."
-	@kubectl port-forward svc/prom-stack-grafana 3000:80 > /dev/null 2>&1 & echo $$! > .grafana.pid
-	@echo "Port-forwarding active! Prometheus: http://localhost:9090 | Grafana: http://localhost:3000"
-	@PASSWORD=$$(kubectl get secret prom-stack-grafana -o jsonpath="{.data.admin-password}" | base64 --decode); \
-	echo "Grafana Login -> User: admin | Password: $$PASSWORD"
+forward-all: ## forward-all: Forward Argo CD (8080), Prometheus (9090) & Grafana (3000) in background
+	@echo "========================================================"
+	@echo " CONTROL PLANE WEB UIs (Tailscale / iPhone Access)"
+	@echo "========================================================"
+	@echo " ARGO CD:    https://$(TAILSCALE_IP):8080"
+	@echo "   User:     admin"
+	@echo -n "   Password: "
+	@kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d 2>/dev/null || echo "Not found"
+	@echo " "
+	@echo "--------------------------------------------------------"
+	@echo " PROMETHEUS: http://$(TAILSCALE_IP):9090"
+	@echo "--------------------------------------------------------"
+	@echo " GRAFANA:    http://$(TAILSCALE_IP):3000"
+	@echo "   User:     admin"
+	@echo -n "   Password: "
+	@kubectl -n default get secret prom-stack-grafana -o jsonpath="{.data.admin-password}" | base64 -d 2>/dev/null || echo "admin"
+	@echo " "
+	@echo "========================================================"
+	@echo "==> Starting Port-Forwards in background..."
+	@kubectl port-forward --address 0.0.0.0 -n argocd svc/argocd-server 8080:443 >/dev/null 2>&1 &
+	@kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-kube-prometheus-prometheus 9090:9090 >/dev/null 2>&1 &
+	@kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-grafana 3000:80 >/dev/null 2>&1 &
+	@echo "==> Done! All 3 UIs are accessible via Tailscale."
+
 
 stop-forward: ## Stop background port-forwarding
 	@if [ -f .prom.pid ]; then kill $$(cat .prom.pid) 2>/dev/null || true; rm .prom.pid; fi
@@ -131,3 +152,18 @@ stop-forward: ## Stop background port-forwarding
 
 test: ## Run unit and integration tests
 	go test -v -race ./...
+
+install-argocd: ## install-argocd: Install Argo CD components into the cluster (Server-Side Apply)
+	@echo "==> Installing Argo CD..."
+	kubectl create namespace argocd || true
+	kubectl apply -n argocd --server-side --force-conflicts -f $(ARGOCD_MANIFEST_URL)
+	@echo "==> Waiting for Argo CD components to be ready..."
+	kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=300s
+
+apply-gitops: ## apply-gitops: Register the api-prober application in Argo CD
+	@echo "==> Registering api-prober Application in Argo CD..."
+	kubectl apply -f deploy/argocd/api-prober-app.yaml
+
+argocd-pass: ## argocd-pass: Retrieve the initial admin password for Argo CD UI
+	@echo "==> Argo CD Initial Admin Password:"
+	@kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo ""

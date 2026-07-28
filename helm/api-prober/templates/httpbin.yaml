@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpbin
+  labels:
+    app: httpbin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: httpbin
+  template:
+    metadata:
+      labels:
+        app: httpbin
+    spec:
+      containers:
+        - name: httpbin
+          image: mccutchen/go-httpbin:v2.14.0
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: 50m
+              memory: 64Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+---
+# 1. Normaler Success Endpoint
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-success
+  labels:
+    app: httpbin
+    probe: "true"
+  annotations:
+    probe/path: "/status/200"
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: httpbin
+---
+# 2. Slow Endpoint (High Latency)
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-slow
+  labels:
+    app: httpbin
+    probe: "true"
+  annotations:
+    probe/path: "/delay/1"
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: httpbin

@@ -1,0 +1,26 @@
+# Replica count for the prober
+replicaCount: 1
+
+# Image configuration for the prober
+image:
+  repository: ghcr.io/demirdilek/api-prober
+  pullPolicy: IfNotPresent
+  tag: "dev"
+
+# Service configuration for the prober
+service:
+  type: ClusterIP
+  port: 8080
+
+# Resource requests and limits for the prober container
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+dashboards:
+  enabled: true
+  label: grafana_dashboard

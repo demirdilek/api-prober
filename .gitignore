@@ -1,34 +1,47 @@
-# Binaries and preresults
+# ==========================================
+# Go Binaries & Build Output
+# ==========================================
+# Root binary (mit / damit helm/api-prober nicht blockiert wird)
+/api-prober
 bin/
 dist/
 out/
-certs/
-api-prober
-
-# Architecture specific files
 *.exe
 *.exe_with_dbg
 *.dll
 *.so
 *.dylib
 
-# Test coverage results
+# ==========================================
+# Go Test & Profile Data
+# ==========================================
 *.out
 *.prof
+*.test
+coverage.txt
 
-# Go modules dependency management
+# ==========================================
+# Go Dependencies
+# ==========================================
 vendor/
 
-# IDE and Editor files
+# ==========================================
+# Local Dev, Environment & Data
+# ==========================================
+.env
+.env.local
+*.log
+grafana-storage/
+prometheus-data/
+
+# ==========================================
+# Editors & IDEs
+# ==========================================
 .idea/
 .vscode/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# OS generated files
+*.swp
+*.swo
+*~
 .DS_Store
 .DS_Store?
 ._*
@@ -36,14 +49,11 @@ vendor/
 .Trashes
 ehthumbs.db
 Thumbs.db
-# Docker persistent data
-grafana-storage/
-prometheus-data/
 
-# Security
-.env
-
-
-# Local archives
+# ==========================================
+# Archives
+# ==========================================
 *.tar
 *.tar.gz
+*.tgz
+
