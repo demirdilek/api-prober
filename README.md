@@ -62,7 +62,9 @@ make test
 
 ## Observability & Dashboards
 
-Grafana is automatically provisioned via sidecar injection. The dashboard displays real-time metrics for Latency, Traffic, Errors, and Saturation.
+The Grafana dashboard is **fully auto-provisioned out of the box** via the Prometheus Operator sidecar mechanism (`grafana_dashboard: "1"`), requiring zero manual JSON imports or configuration. It visualizes real-time telemetry for all 4 Golden Signals: Latency, Traffic, Errors, and Saturation.
+
+Once port-forwarding is active (`make forward-all`), access Grafana at `http://localhost:3000`. The default home screen is automatically configured to display the 4 Golden Signals.
 
 Once port-forwarding is active, access Grafana at  <http://localhost:3000>  The login credentials will be printed in your terminal by the Makefile.
 
