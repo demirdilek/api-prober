@@ -35,6 +35,10 @@ k3d-up: ## 1. Create a local k3d Kubernetes cluster
 	fi
 
 vault-up: ## 2. Start local HashiCorp Vault container & seed secrets
+	@if [ ! -f .env ]; then \
+		echo "Error: .env file missing! Copy .env.example to .env and set your credentials."; \
+		exit 1; \
+	fi
 	@if docker ps | grep -q "$(VAULT_CONTAINER_NAME)"; then \
 		echo "Vault container already running."; \
 	else \
@@ -99,7 +103,7 @@ hard-reset: ## 9. Deep clean docker system, delete cluster, and rebuild everythi
 	$(MAKE) clean
 	$(MAKE) all
 
-all: k3d-up vault-up docker-build eso-install vault-secrets prometheus-install helm-install ## [OUT-OF-THE-BOX] Spin up entire stack from scratch
+all: k3d-up vault-up docker-build eso-install vault-secrets prometheus-install install-argocd apply-gitops helm-install
 	@echo "========================================================="
 	@echo " api-prober stack is fully up and running out-of-the-box! "
 	@echo "========================================================="
@@ -120,7 +124,7 @@ k3d-down: vault-down ## Delete local k3d cluster & stop Vault
 clean: k3d-down ## Clean up cluster, containers and temporary files
 	rm -f project-dump.txt
 
-forward-all: ## forward-all: Forward Argo CD (8080), Prometheus (9090) & Grafana (3000) in background
+forward-all: ## Forward Argo CD, Prometheus & Grafana UIs
 	@echo "========================================================"
 	@echo " CONTROL PLANE WEB UIs (Tailscale / iPhone Access)"
 	@echo "========================================================"
@@ -139,16 +143,15 @@ forward-all: ## forward-all: Forward Argo CD (8080), Prometheus (9090) & Grafana
 	@echo " "
 	@echo "========================================================"
 	@echo "==> Starting Port-Forwards in background..."
-	@kubectl port-forward --address 0.0.0.0 -n argocd svc/argocd-server 8080:443 >/dev/null 2>&1 &
-	@kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-kube-prometheus-prometheus 9090:9090 >/dev/null 2>&1 &
-	@kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-grafana 3000:80 >/dev/null 2>&1 &
+	@kubectl port-forward --address 0.0.0.0 -n argocd svc/argocd-server 8080:443 >/dev/null 2>&1 & echo $$! > .argo.pid
+	@kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-kube-prometheus-prometheus 9090:9090 >/dev/null 2>&1 & echo $$! > .prom.pid
+	@kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-grafana 3000:80 >/dev/null 2>&1 & echo $$! > .grafana.pid
 	@echo "==> Done! All 3 UIs are accessible via Tailscale."
 
-
 stop-forward: ## Stop background port-forwarding
-	@if [ -f .prom.pid ]; then kill $$(cat .prom.pid) 2>/dev/null || true; rm .prom.pid; fi
-	@if [ -f .grafana.pid ]; then kill $$(cat .grafana.pid) 2>/dev/null || true; rm .grafana.pid; fi
-	@echo "Stopped port-forwarding."
+	@pkill -f "kubectl port-forward" 2>/dev/null || true
+	@rm -f .argo.pid .prom.pid .grafana.pid
+	@echo "Stopped all port-forwards."
 
 test: ## Run unit and integration tests
 	go test -v -race ./...
