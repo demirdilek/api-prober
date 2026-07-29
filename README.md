@@ -73,6 +73,9 @@ Verify that HashiCorp Vault is initialized and unsealed:
 # Spin up the entire stack from scratch (k3d, Vault, Docker build, ESO, Prometheus, Argo CD, Helm deployment)
 make all
 
+# Delete local k3d cluster, stop Vault containers, and clean up local artifacts
+make clean
+
 # Start background port-forwarding for Argo CD (8080), Prometheus (9090), and Grafana (3000)
 make forward-all
 
