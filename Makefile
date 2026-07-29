@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help k3d-up vault-up docker-build eso-install vault-secrets prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset vault-down k3d-down clean forward-all stop-forward test iinstall-argocd apply-gitops argocd-pass
+.PHONY: help k3d-up vault-up docker-build clean-build eso-install vault-secrets prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset vault-down k3d-down clean forward-all stop-forward test iinstall-argocd apply-gitops argocd-pass
 
 .DEFAULT_GOAL := help
 
@@ -57,6 +57,10 @@ vault-up: ## 2. Start local HashiCorp Vault container & seed secrets
 docker-build: ## 3. Build local Docker image and import into k3d
 	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
+
+clean-build: ## Force a clean build by wiping BuildKit cache
+	docker builder prune --all -f
+	docker build --no-cache -t api-prober .
 
 eso-install: ## 4. Install External Secrets Operator
 	helm repo add external-secrets https://charts.external-secrets.io
