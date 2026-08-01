@@ -1,36 +1,35 @@
 # ---------------------------------------------------
-# Stage 1: Build-Umgebung
+# Stage 1: Build environment
 # ---------------------------------------------------
 FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
-# CA-Zertifikate & Zeitzonen installieren (wichtig für HTTPS-Aufrufe & Zeit-Funktionen in Go)
-RUN apk add --no-cache ca-certificates tzdata
+# Install CA certificates for outgoing HTTPS requests (Pushover, webhooks)
+RUN apk add --no-cache ca-certificates
 
-# Dependencies cachen (wird nur neu ausgeführt, wenn sich go.mod/go.sum ändert)
+# Cache dependencies (re-run only when go.mod or go.sum changes)
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Quellcode kopieren
+# Copy source code
 COPY . .
 
-# Statisch kompilierte & gestrippte Binary bauen
+# Build statically compiled and stripped binary
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o api-prober .
 
 # ---------------------------------------------------
-# Stage 2: Minimales Final-Image
+# Stage 2: Minimal runtime image (~18 MB)
 # ---------------------------------------------------
 FROM scratch
 
 WORKDIR /app
 
-# Root-Zertifikate für HTTPS-Requests kopieren
+# Copy root CA certificates for TLS verification
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 
-# Nur die fertig gebaute Binary aus der Builder-Stage übernehmen
+# Copy the compiled binary
 COPY --from=builder /app/api-prober /app/api-prober
 
-# Container starten
+# Run application
 ENTRYPOINT ["/app/api-prober"]
