@@ -97,7 +97,11 @@ func probeTarget(ctx context.Context, target string, dispatcher *prober.Dispatch
 	// Errors: Track non-empty error categories as request failures
 	if errCat != "" {
 		errorCounter.WithLabelValues(target, string(errCat)).Inc()
-		slog.Warn("Target probing failed", "target", target, "error_category", errCat)
+		slog.Warn("Target probing failed",
+			"target", target,
+			"error_category", errCat,
+			"hint", errCat.Hint(), // <-- Actionable SRE hint
+		)
 	} else {
 		slog.Debug("Target probed successfully", "target", target, "duration_seconds", duration)
 	}
