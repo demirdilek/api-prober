@@ -2,13 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [ "**" ]
+    branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Erlaubt das Zurückschreiben von Commits ins Repo
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -22,5 +25,51 @@ jobs:
       - name: Run Tests
         run: go test -v -race ./...
 
-      - name: Build stripped binary
-        run: CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o api-prober .
+      # 1. Login bei GHCR
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Short-SHA Tag extrahieren
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+
+      # 3. Image bauen & pushen
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # 4. GitOps Step: helm/values.yaml mit dem neuen SHA aktualisieren
+      - name: Update Helm Values Tag
+        if: github.event_name != 'pull_request'
+        run: |
+          # Kurzen SHA für das Tag holen (z. B. sha-a1b2c3d)
+          SHORT_SHA="sha-${GITHUB_SHA::7}"
+          
+          # Ersetzt den Wert des 'tag:' Feldes unter 'image:' in helm/values.yaml
+          sed -i "s/tag: .*/tag: \"${SHORT_SHA}\"/g" helm/values.yaml
+          
+          # Git Identity für den Commit setzen
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Änderungen committen und zurückpushen (falls sich etwas geändert hat)
+          git add helm/values.yaml
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(gitops): update image tag to ${SHORT_SHA} [skip ci]"
+            git push
+          fi
