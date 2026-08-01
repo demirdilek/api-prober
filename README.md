@@ -3,7 +3,18 @@
 [![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+
 A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation) for distributed edge environments.
+
+## Container Image Specs
+
+### 📦 Container Image Specs
+
+[![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/api-prober)](https://github.com/demirdilek/api-prober)
+[![Image Size](https://img.shields.io/badge/dynamic/json?color=blue&label=image%20size&query=%24.data.repository.packages.edges%5B0%5D.node.packageVersion.version&url=https%3A%2F%2Fghcr-badge.egress.workers.dev%2Fdemirdilek%2Fapi-prober)](https://github.com/demirdilek/api-prober/pkgs/container/api-prober)
+
+- **Registry:** `ghcr.io/demirdilek/api-prober:latest`
+- **Base Image:** `gcr.io/distroless/static`
 
 ## Features
 

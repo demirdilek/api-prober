@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/demirdilek/api-prober/pkg/prober"
 )
 
 // English comments as preferred
@@ -57,11 +59,12 @@ func TestProbeTarget_Success(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-
-	client := server.Client()
+	httpProber := prober.NewHTTPProber(server.Client())
+	dispatcher := prober.NewDispatcher()
+	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
 
 	// Perform probe on successful endpoint
-	probeTarget(ctx, server.URL, client)
+	probeTarget(ctx, server.URL, dispatcher)
 }
 
 func TestProbeTarget_Non2xxStatus(t *testing.T) {
@@ -72,11 +75,12 @@ func TestProbeTarget_Non2xxStatus(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-
-	client := server.Client()
+	httpProber := prober.NewHTTPProber(server.Client())
+	dispatcher := prober.NewDispatcher()
+	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
 
 	// Perform probe on failing endpoint
-	probeTarget(ctx, server.URL, client)
+	probeTarget(ctx, server.URL, dispatcher)
 }
 
 func TestTargetScheduler(t *testing.T) {

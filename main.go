@@ -21,18 +21,21 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/demirdilek/api-prober/pkg/prober"
 )
 
 var (
+	// Latency measures probing duration in seconds per target.
 	latencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "api_prober_latency_seconds",
-			Help:    "The time taken to probe the target in seconds (Latency).",
-			Buckets: prometheus.DefBuckets,
+			Name: "api_prober_latency_seconds",
+			Help: "The time taken to probe the target in seconds (Latency).",
 		},
 		[]string{"target"},
 	)
 
+	// Traffic tracks the total number of probe requests sent per target.
 	trafficCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "api_prober_traffic_total",
@@ -41,6 +44,7 @@ var (
 		[]string{"target"},
 	)
 
+	// Errors tracks failed probes categorized by target and HTTP status code.
 	errorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "api_prober_errors_total",
@@ -49,6 +53,7 @@ var (
 		[]string{"target", "status_code"},
 	)
 
+	// Saturation gauges current capacity by counting active concurrent worker goroutines.
 	saturationGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "api_prober_saturation_active_workers",
@@ -59,6 +64,7 @@ var (
 )
 
 func init() {
+	// Register the 4 Golden Signals metrics with the default Prometheus registry.
 	prometheus.MustRegister(latencyHistogram)
 	prometheus.MustRegister(trafficCounter)
 	prometheus.MustRegister(errorCounter)
@@ -66,45 +72,39 @@ func init() {
 }
 
 type Job struct {
+	// Target is the URL to be probed.
 	Target string
 }
 
-func probeTarget(ctx context.Context, target string, client *http.Client) {
+// probeTarget executes a probe against a target via the dispatcher and records 4 Golden Signals metrics.
+func probeTarget(ctx context.Context, target string, dispatcher *prober.Dispatcher) {
+	// Saturation: Track currently active, in-flight probe requests
 	saturationGauge.WithLabelValues(target).Inc()
 	defer saturationGauge.WithLabelValues(target).Dec()
 
+	// Traffic: Track the total rate of incoming probe executions
 	trafficCounter.WithLabelValues(target).Inc()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		slog.Error("Failed to create HTTP request", "target", target, "error", err)
-		errorCounter.WithLabelValues(target, "request_creation_error").Inc()
-		return
-	}
-
 	startTime := time.Now()
-	resp, err := client.Do(req)
+
+	// EXECUTION VIA DISPATCHER (Function Pointer Routing)
+	errCat := dispatcher.Execute(ctx, target)
 	duration := time.Since(startTime).Seconds()
 
-	if err != nil {
-		slog.Warn("Target is unreachable or request timed out", "target", target, "error", err)
-		errorCounter.WithLabelValues(target, "network_error").Inc()
-		return
-	}
-	defer resp.Body.Close()
-
+	// Latency: Record time taken for round trips
 	latencyHistogram.WithLabelValues(target).Observe(duration)
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		statusStr := strconv.Itoa(resp.StatusCode)
-		errorCounter.WithLabelValues(target, statusStr).Inc()
-		slog.Warn("Target returned non-2xx status code", "target", target, "status_code", resp.StatusCode)
+	// Errors: Track non-empty error categories as request failures
+	if errCat != "" {
+		errorCounter.WithLabelValues(target, string(errCat)).Inc()
+		slog.Warn("Target probing failed", "target", target, "error_category", errCat)
 	} else {
 		slog.Debug("Target probed successfully", "target", target, "duration_seconds", duration)
 	}
 }
 
-func workerPool(ctx context.Context, jobs <-chan Job, client *http.Client, wg *sync.WaitGroup) {
+// workerPool continuously processes incoming jobs until the context is canceled or the channel is closed.
+func workerPool(ctx context.Context, jobs <-chan Job, dispatcher *prober.Dispatcher, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		select {
@@ -114,16 +114,20 @@ func workerPool(ctx context.Context, jobs <-chan Job, client *http.Client, wg *s
 			if !ok {
 				return
 			}
-			probeTarget(ctx, job.Target, client)
+			probeTarget(ctx, job.Target, dispatcher)
 		}
 	}
 }
 
+// targetScheduler pushes a target job into the jobs channel immediately,
+// and then periodically at the specified interval until the context is canceled.
 func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interval time.Duration, wg *sync.WaitGroup) {
 	defer wg.Done()
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	// Send the first job immediately upon startup
 	select {
 	case jobs <- Job{Target: target}:
 	case <-ctx.Done():
@@ -144,11 +148,10 @@ func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interv
 	}
 }
 
-// watchK8sServices implements Service Discovery using the K8s API
+// watchK8sServices implements Service Discovery using the Kubernetes API.
 func watchK8sServices(ctx context.Context, jobs chan<- Job, interval time.Duration, activeSchedulers map[string]context.CancelFunc, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	// Try in-cluster config first, fallback to local kubeconfig for development
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		kubeconfig := os.Getenv("KUBECONFIG")
@@ -170,6 +173,7 @@ func watchK8sServices(ctx context.Context, jobs chan<- Job, interval time.Durati
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
 	var mu sync.Mutex
 
 	for {
@@ -177,7 +181,6 @@ func watchK8sServices(ctx context.Context, jobs chan<- Job, interval time.Durati
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// List services across all namespaces with label 'probe=true'
 			services, err := clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{
 				LabelSelector: "probe=true",
 			})
@@ -257,7 +260,8 @@ func main() {
 
 	probeInterval := time.Duration(probeIntervalSeconds) * time.Second
 
-	client := &http.Client{
+	// 1. Configure custom HTTP client
+	httpClient := &http.Client{
 		Timeout: time.Duration(httpTimeoutSeconds) * time.Second,
 		Transport: &http.Transport{
 			MaxIdleConns:        maxIdleConns,
@@ -266,6 +270,14 @@ func main() {
 		},
 	}
 
+	// 2. Initialize HTTP Prober and Dispatcher
+	httpProber := prober.NewHTTPProber(httpClient)
+	dispatcher := prober.NewDispatcher()
+
+	// 3. Register HTTP & HTTPS schemes using Function Pointers
+	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
+	dispatcher.Register("https", httpProber.ProbeHTTPTarget)
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -273,11 +285,13 @@ func main() {
 	activeSchedulers := make(map[string]context.CancelFunc)
 	jobs := make(chan Job, jobQueueSize)
 
+	// 4. Spawn background worker goroutines passing the dispatcher
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go workerPool(ctx, jobs, client, &wg)
+		go workerPool(ctx, jobs, dispatcher, &wg)
 	}
 
+	// Start Kubernetes Service Discovery routine
 	wg.Add(1)
 	go watchK8sServices(ctx, jobs, probeInterval, activeSchedulers, &wg)
 

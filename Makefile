@@ -1,31 +1,46 @@
 -include .env
 export
 
-.PHONY: help k3d-up vault-up docker-build clean-build eso-install vault-secrets prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset vault-down k3d-down clean forward-all stop-forward test iinstall-argocd apply-gitops argocd-pass
+.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass create-secrets test-alert test-alert-clean
 
 .DEFAULT_GOAL := help
+
+# English comments as requested
 
 # Container registry configuration
 IMAGE_REPO=ghcr.io/demirdilek/api-prober
 IMAGE_TAG=dev
 
 ARGOCD_MANIFEST_URL ?= https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-
 TAILSCALE_IP ?= $(shell tailscale ip -4 2>/dev/null || echo "localhost")
 
 # Helm variables
 RELEASE_NAME=api-prober
 CHART_DIR=./helm/api-prober
 
-# Vault Docker settings for local dev
-VAULT_CONTAINER_NAME=vault-dev-server
-VAULT_DEV_TOKEN=myroottoken
-
 help: ## Show this help message
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+lint: ## Run golangci-lint or go vet for code quality
+	@echo "==> Running linter..."
+	@if command -v golangci-lint > /dev/null; then \
+		golangci-lint run ./...; \
+	else \
+		echo "golangci-lint not installed, running go vet..."; \
+		go vet ./...; \
+	fi
+
+test: ## Run unit and integration tests with race detection
+	@echo "==> Running tests with race detector..."
+	go test -v -race ./...
+
+test-coverage: ## Run tests and generate HTML coverage report
+	@echo "==> Generating test coverage..."
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
 
 k3d-up: ## 1. Create a local k3d Kubernetes cluster
 	@if k3d cluster list | grep -q "mycluster"; then \
@@ -34,58 +49,17 @@ k3d-up: ## 1. Create a local k3d Kubernetes cluster
 		k3d cluster create mycluster --api-port 6443 -p "80:80@loadbalancer" -p "443:443@loadbalancer" --agents 2; \
 	fi
 
-vault-up: ## 2. Start local HashiCorp Vault container & seed secrets
-	@if [ ! -f .env ]; then \
-		echo "Error: .env file missing! Copy .env.example to .env and set your credentials."; \
-		exit 1; \
-	fi
-	@if docker ps | grep -q "$(VAULT_CONTAINER_NAME)"; then \
-		echo "Vault container already running."; \
-	else \
-		echo "Starting local HashiCorp Vault..."; \
-		docker run -d --name $(VAULT_CONTAINER_NAME) \
-			-p 8200:8200 \
-			-e VAULT_DEV_ROOT_TOKEN_ID=$(VAULT_DEV_TOKEN) \
-			hashicorp/vault:latest; \
-		echo "Waiting for Vault to initialize..."; \
-		sleep 4; \
-		docker exec -e VAULT_ADDR='http://127.0.0.1:8200' $(VAULT_CONTAINER_NAME) \
-			vault kv put secret/pushover user_key="$(PUSHOVER_USER_KEY)" api_token="$(PUSHOVER_API_TOKEN)"; \
-		echo "Vault initialized and secrets seeded at secret/pushover!"; \
-	fi
-
-docker-build: ## 3. Build local Docker image and import into k3d
+docker-build: lint test ## 2. Build local Docker image and import into k3d (runs lint & test first)
+	@echo "==> Building Docker image..."
 	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
+	@echo "==> Importing image into k3d..."
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
 
 clean-build: ## Force a clean build by wiping BuildKit cache
 	docker builder prune --all -f
-	docker build --no-cache -t api-prober .
+	docker build --no-cache -t $(IMAGE_REPO):$(IMAGE_TAG) .
 
-eso-install: ## 4. Install External Secrets Operator
-	helm repo add external-secrets https://charts.external-secrets.io
-	helm repo update
-	@if ! helm status external-secrets > /dev/null 2>&1; then \
-		echo "Installing External Secrets Operator..."; \
-		helm install external-secrets external-secrets/external-secrets \
-			--set installCRDs=true \
-			--set webhook.create=false \
-			--set certController.create=false \
-			--wait; \
-		echo "Waiting for CRD registration in Kubernetes API server..."; \
-		until kubectl api-resources | grep -q "secretstores"; do sleep 1; done; \
-	else \
-		echo "External Secrets Operator already installed."; \
-	fi
-
-vault-secrets: ## 5. Connect Vault to k3d & sync Kubernetes secrets via ESO
-	@sleep 3
-	kubectl apply -f vault-external.yaml || true
-	kubectl create secret generic vault-token --from-literal=token=$(VAULT_DEV_TOKEN) --dry-run=client -o yaml | kubectl apply -f -
-	kubectl apply -f vault-store.yaml
-	kubectl apply -f externalsecret.yaml
-
-prometheus-install: ## 6. Install kube-prometheus-stack via Helm
+prometheus-install: ## 3. Install kube-prometheus-stack via Helm
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 	helm repo update
 	@if ! helm status prom-stack > /dev/null 2>&1; then \
@@ -94,20 +68,25 @@ prometheus-install: ## 6. Install kube-prometheus-stack via Helm
 		echo "Prometheus stack already installed."; \
 	fi
 
-helm-install: ## 7. Deploy application Helm chart (api-prober)
+install-argocd: ## 4. Install Argo CD components into the cluster
+	@echo "==> Installing Argo CD..."
+	kubectl create namespace argocd || true
+	kubectl apply -n argocd --server-side --force-conflicts -f $(ARGOCD_MANIFEST_URL)
+	@echo "==> Waiting for Argo CD components to be ready..."
+	kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=300s
+
+apply-gitops: ## 5. Register the api-prober application in Argo CD
+	@echo "==> Registering api-prober Application in Argo CD..."
+	kubectl apply -f deploy/argocd/api-prober-app.yaml
+
+helm-install: ## 6. Deploy application Helm chart (api-prober)
 	helm upgrade --install $(RELEASE_NAME) $(CHART_DIR)
 
-local-deploy: ## 8. Build fresh without cache, import to k3d, and restart deployment
-	docker build --no-cache -t $(IMAGE_REPO):$(IMAGE_TAG) .
+local-deploy: lint test docker-build create-secrets ## Fast local rebuild, import, and rollout restart
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
 	kubectl rollout restart deployment $(RELEASE_NAME)
 
-hard-reset: ## 9. Deep clean docker system, delete cluster, and rebuild everything fresh
-	docker system prune -a --volumes -f
-	$(MAKE) clean
-	$(MAKE) all
-
-all: k3d-up vault-up docker-build eso-install vault-secrets prometheus-install install-argocd apply-gitops helm-install
+all: k3d-up create-secrets docker-build prometheus-install install-argocd apply-gitops helm-install ## Bootstrap entire local stack out-of-the-box
 	@echo "========================================================="
 	@echo " api-prober stack is fully up and running out-of-the-box! "
 	@echo "========================================================="
@@ -118,24 +97,20 @@ helm-upgrade: ## Upgrade existing api-prober Helm release
 helm-uninstall: ## Remove api-prober Helm release
 	helm uninstall $(RELEASE_NAME) || true
 
-vault-down: ## Stop and remove Vault container
-	@docker stop $(VAULT_CONTAINER_NAME) || true
-	@docker rm $(VAULT_CONTAINER_NAME) || true
-
-k3d-down: vault-down ## Delete local k3d cluster & stop Vault
+k3d-down: ## Delete local k3d cluster
 	k3d cluster delete mycluster || true
 
-clean: k3d-down ## Clean up cluster, containers and temporary files
-	rm -f project-dump.txt
+clean: k3d-down ## Clean up cluster and temporary build files
+	rm -f project-dump.txt coverage.out coverage.html .argo.pid .prom.pid .grafana.pid
 
-forward-all: ## Forward Argo CD, Prometheus & Grafana UIs
+forward-all: ## Forward Argo CD, Prometheus & Grafana UIs for Mobile/Tailscale
 	@echo "========================================================"
 	@echo " CONTROL PLANE WEB UIs (Tailscale / iPhone Access)"
 	@echo "========================================================"
 	@echo " ARGO CD:    https://$(TAILSCALE_IP):8080"
 	@echo "   User:     admin"
 	@echo -n "   Password: "
-	@kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d 2>/dev/null || echo "Not found"
+	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" | base64 -d 2>/dev/null || echo "Not found"
 	@echo " "
 	@echo "--------------------------------------------------------"
 	@echo " PROMETHEUS: http://$(TAILSCALE_IP):9090"
@@ -157,20 +132,61 @@ stop-forward: ## Stop background port-forwarding
 	@rm -f .argo.pid .prom.pid .grafana.pid
 	@echo "Stopped all port-forwards."
 
-test: ## Run unit and integration tests
-	go test -v -race ./...
-
-install-argocd: ## install-argocd: Install Argo CD components into the cluster (Server-Side Apply)
-	@echo "==> Installing Argo CD..."
-	kubectl create namespace argocd || true
-	kubectl apply -n argocd --server-side --force-conflicts -f $(ARGOCD_MANIFEST_URL)
-	@echo "==> Waiting for Argo CD components to be ready..."
-	kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=300s
-
-apply-gitops: ## apply-gitops: Register the api-prober application in Argo CD
-	@echo "==> Registering api-prober Application in Argo CD..."
-	kubectl apply -f deploy/argocd/api-prober-app.yaml
-
-argocd-pass: ## argocd-pass: Retrieve the initial admin password for Argo CD UI
+argocd-pass: ## Retrieve initial admin password for Argo CD UI
 	@echo "==> Argo CD Initial Admin Password:"
-	@kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo ""
+	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" | base64 -d; echo ""
+
+create-secrets: ## Create Kubernetes secret from local .env credentials
+	@echo "==> Creating pushover-credentials secret in k3d..."
+	@kubectl create secret generic pushover-credentials \
+		--from-literal=USER_KEY=$(PUSHOVER_USER_KEY) \
+		--from-literal=APP_TOKEN=$(PUSHOVER_API_TOKEN) \
+		--dry-run=client -o yaml | kubectl apply -f -
+
+hard-reset: clean all ## Deep clean cluster and rebuild stack fresh
+
+test-alert: ## Test target to simulate an HTTP 500 error for Pushover alerts
+	@echo "==> Deploying error target (HTTP 500)..."
+	@printf '%s\n' \
+		'apiVersion: apps/v1' \
+		'kind: Deployment' \
+		'metadata:' \
+		'  name: httpbin-error' \
+		'  namespace: default' \
+		'spec:' \
+		'  replicas: 1' \
+		'  selector:' \
+		'    matchLabels:' \
+		'      app: httpbin-error' \
+		'  template:' \
+		'    metadata:' \
+		'      labels:' \
+		'        app: httpbin-error' \
+		'    spec:' \
+		'      containers:' \
+		'        - name: httpbin' \
+		'          image: mccutchen/go-httpbin:latest' \
+		'          ports:' \
+		'            - containerPort: 8080' \
+		'---' \
+		'apiVersion: v1' \
+		'kind: Service' \
+		'metadata:' \
+		'  name: httpbin-error' \
+		'  namespace: default' \
+		'  labels:' \
+		'    probe: "true"' \
+		'  annotations:' \
+		'    probe/path: "/status/500"' \
+		'spec:' \
+		'  ports:' \
+		'    - port: 80' \
+		'      targetPort: 8080' \
+		'      name: http' \
+		'  selector:' \
+		'    app: httpbin-error' | kubectl apply -f -
+
+test-alert-clean: ## Cleanup target for the error simulation
+	@echo "==> Cleaning up error target..."
+	@kubectl delete deployment httpbin-error --ignore-not-found
+	@kubectl delete service httpbin-error --ignore-not-found
