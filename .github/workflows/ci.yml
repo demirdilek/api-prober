@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # Erlaubt das Zurückschreiben von Commits ins Repo
+      packages: write # Erlaubt das Pushen von Docker Images zu GHCR
 
     steps:
       - name: Checkout code
