@@ -62,14 +62,14 @@ jobs:
           SHORT_SHA="sha-${GITHUB_SHA::7}"
           
           # Ersetzt den Wert des 'tag:' Feldes unter 'image:' in helm/values.yaml
-          sed -i "s/tag: .*/tag: \"${SHORT_SHA}\"/g" helm/values.yaml
+          sed -i "s/tag: .*/tag: \"${SHORT_SHA}\"/g" helm/api-prober/values.yaml
           
           # Git Identity für den Commit setzen
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           # Änderungen committen und zurückpushen (falls sich etwas geändert hat)
-          git add helm/values.yaml
+          git add helm/api-prober/values.yaml
           if ! git diff --staged --quiet; then
             git commit -m "chore(gitops): update image tag to ${SHORT_SHA} [skip ci]"
             git push
