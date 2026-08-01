@@ -1,27 +1,36 @@
-# Stage 1: Build
-FROM --platform=$BUILDPLATFORM golang:latest AS builder
+# ---------------------------------------------------
+# Stage 1: Build-Umgebung
+# ---------------------------------------------------
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
+# CA-Zertifikate & Zeitzonen installieren (wichtig für HTTPS-Aufrufe & Zeit-Funktionen in Go)
+RUN apk add --no-cache ca-certificates tzdata
+
+# Dependencies cachen (wird nur neu ausgeführt, wenn sich go.mod/go.sum ändert)
 COPY go.mod go.sum ./
 RUN go mod download
 
+# Quellcode kopieren
 COPY . .
 
-# Automatic BuildKit architecture variables
-ARG TARGETOS
-ARG TARGETARCH
+# Statisch kompilierte & gestrippte Binary bauen
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o api-prober .
 
-# Fallback to local host architecture if TARGETARCH is empty
-RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -ldflags="-w -s" -o api-prober .
-
-# Stage 2: Final minimal image
-FROM alpine:latest
+# ---------------------------------------------------
+# Stage 2: Minimales Final-Image
+# ---------------------------------------------------
+FROM scratch
 
 WORKDIR /app
 
-COPY --from=builder /app/api-prober .
+# Root-Zertifikate für HTTPS-Requests kopieren
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 
-EXPOSE 8080
+# Nur die fertig gebaute Binary aus der Builder-Stage übernehmen
+COPY --from=builder /app/api-prober /app/api-prober
 
-CMD ["./api-prober"]
+# Container starten
+ENTRYPOINT ["/app/api-prober"]

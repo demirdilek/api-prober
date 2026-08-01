@@ -16,20 +16,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26' 
+          go-version: '1.26.5'
           cache: true
-
-      - name: Install dependencies
-        run: go mod download
-
-      - name: Build
-        run: go build -v ./...
-  
-      - name: Install dependencies
-        run: go mod download
 
       - name: Run Tests
         run: go test -v -race ./...
 
-      - name: Build
-        run: go build -v ./...
+      - name: Build stripped binary
+        run: CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o api-prober .
