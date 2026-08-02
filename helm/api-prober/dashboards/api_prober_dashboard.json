@@ -41,12 +41,16 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
         {
-          "expr": "sum(rate(api_prober_errors_total[5m])) by (target, status_code)",
+          "expr": "sum(rate(api_prober_errors_total[5m])) by (target, status_code) or vector(0)",
           "legendFormat": "{{target}} - Status {{status_code}}"
         }
       ],
       "fieldConfig": {
-        "defaults": { "custom": { "drawStyle": "line" }, "unit": "none" }
+        "defaults": { 
+          "custom": { "drawStyle": "line" }, 
+          "unit": "none",
+          "noValue": "0"
+        }
       }
     },
     {
