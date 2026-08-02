@@ -5,7 +5,7 @@ replicaCount: 1
 image:
   repository: ghcr.io/demirdilek/api-prober
   pullPolicy: IfNotPresent
-  tag: "sha-6fa4432"
+  tag: "sha-d554787"
 
 # Service configuration for the prober
 service:
