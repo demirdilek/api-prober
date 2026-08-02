@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/pprof"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -100,7 +98,7 @@ func probeTarget(ctx context.Context, target string, dispatcher *prober.Dispatch
 		slog.Warn("Target probing failed",
 			"target", target,
 			"error_category", errCat,
-			"hint", errCat.Hint(), // <-- Actionable SRE hint
+			"hint", errCat.Hint(), // Actionable SRE hint
 		)
 	} else {
 		slog.Debug("Target probed successfully", "target", target, "duration_seconds", duration)
@@ -152,93 +150,6 @@ func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interv
 	}
 }
 
-// watchK8sServices implements Service Discovery using the Kubernetes API.
-func watchK8sServices(ctx context.Context, jobs chan<- Job, interval time.Duration, activeSchedulers map[string]context.CancelFunc, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		kubeconfig := os.Getenv("KUBECONFIG")
-		if kubeconfig == "" {
-			kubeconfig = filepath.Join(os.Getenv("HOME"), ".kube", "config")
-		}
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			slog.Error("Failed to build k8s config", "error", err)
-			return
-		}
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		slog.Error("Failed to create k8s clientset", "error", err)
-		return
-	}
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	var mu sync.Mutex
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			services, err := clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{
-				LabelSelector: "probe=true",
-			})
-			if err != nil {
-				slog.Error("Failed to list k8s services", "error", err)
-				continue
-			}
-
-			var discoveredTargets []string
-			for _, svc := range services.Items {
-				probePath := "/status/200"
-				if pathAnnot, ok := svc.Annotations["probe/path"]; ok && pathAnnot != "" {
-					probePath = pathAnnot
-				}
-
-				for _, port := range svc.Spec.Ports {
-					targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svc.Name, svc.Namespace, port.Port, probePath)
-					discoveredTargets = append(discoveredTargets, targetURL)
-				}
-			}
-
-			mu.Lock()
-			for target, cancelFunc := range activeSchedulers {
-				if !contains(discoveredTargets, target) {
-					slog.Info("Target service removed, stopping scheduler", "target", target)
-					cancelFunc()
-					delete(activeSchedulers, target)
-				}
-			}
-
-			for _, target := range discoveredTargets {
-				if _, exists := activeSchedulers[target]; !exists {
-					slog.Info("New K8s service discovered, allocating scheduler", "target", target)
-					schedCtx, schedCancel := context.WithCancel(ctx)
-					activeSchedulers[target] = schedCancel
-
-					wg.Add(1)
-					go targetScheduler(schedCtx, target, jobs, interval, wg)
-				}
-			}
-			mu.Unlock()
-		}
-	}
-}
-
-func contains(slice []string, key string) bool {
-	for _, item := range slice {
-		if item == key {
-			return true
-		}
-	}
-	return false
-}
-
 func getEnvAsInt(name string, defaultVal int) int {
 	valStr := os.Getenv(name)
 	if valStr == "" {
@@ -286,7 +197,6 @@ func main() {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	activeSchedulers := make(map[string]context.CancelFunc)
 	jobs := make(chan Job, jobQueueSize)
 
 	// 4. Spawn background worker goroutines passing the dispatcher
@@ -295,9 +205,77 @@ func main() {
 		go workerPool(ctx, jobs, dispatcher, &wg)
 	}
 
-	// Start Kubernetes Service Discovery routine
-	wg.Add(1)
-	go watchK8sServices(ctx, jobs, probeInterval, activeSchedulers, &wg)
+	// 5. Build Kubernetes client configuration
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		kubeconfig := os.Getenv("KUBECONFIG")
+		if kubeconfig == "" {
+			kubeconfig = filepath.Join(os.Getenv("HOME"), ".kube", "config")
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			slog.Error("Failed to build k8s config", "error", err)
+			os.Exit(1)
+		}
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		slog.Error("Failed to create k8s clientset", "error", err)
+		os.Exit(1)
+	}
+
+	// 6. Initialize Target Registry and TargetWatcher Informer
+	registry := prober.NewRegistry()
+	watcher := prober.NewTargetWatcher(clientset, registry)
+
+	// Start Kubernetes Informer in background
+	go func() {
+		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("Informer watcher stopped with error", "error", err)
+		}
+	}()
+
+	// 7. Synchronize Informer events with Prober Schedulers
+	activeSchedulers := make(map[string]context.CancelFunc)
+	var schedMu sync.Mutex
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				discoveredTargets := registry.GetTargets()
+
+				schedMu.Lock()
+				// Remove targets that no longer exist
+				for target, cancelFunc := range activeSchedulers {
+					if !contains(discoveredTargets, target) {
+						slog.Info("Target removed, stopping scheduler", "target", target)
+						cancelFunc()
+						delete(activeSchedulers, target)
+					}
+				}
+
+				// Add newly discovered targets
+				for _, target := range discoveredTargets {
+					if _, exists := activeSchedulers[target]; !exists {
+						slog.Info("New target discovered via Informer, allocating scheduler", "target", target)
+						schedCtx, schedCancel := context.WithCancel(ctx)
+						activeSchedulers[target] = schedCancel
+
+						wg.Add(1)
+						go targetScheduler(schedCtx, target, jobs, probeInterval, &wg)
+					}
+				}
+				schedMu.Unlock()
+			}
+		}
+	}()
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
@@ -336,4 +314,13 @@ func main() {
 	_ = srv.Shutdown(shutdownCtx)
 	wg.Wait()
 	slog.Info("api-prober stack components stopped cleanly. Goodbye.")
+}
+
+func contains(slice []string, key string) bool {
+	for _, item := range slice {
+		if item == key {
+			return true
+		}
+	}
+	return false
 }
