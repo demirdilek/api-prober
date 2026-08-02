@@ -19,6 +19,7 @@ A cloud-native, platform-independent SRE telemetry stack written in Go. This pro
 
 ## Key Features
 
+- **Event-Driven K8s Target Discovery:** Replaces high-overhead API polling with modern `discoveryv1.EndpointSlice` Kubernetes Informers. Targets are added, updated, or removed in real-time with zero latency and zero unnecessary network polling against etcd.
 - **Dynamic K8s Targets:** Monitored endpoints are dynamically discovered via Kubernetes API labels (`probe=true`) and custom path annotations (`probe/path="/healthz"`).
 - **6-Tier SRE Error Classification:** Categorizes failures into discrete buckets: `dns_error`, `connection_refused`, `tls_error`, `timeout`, `http_error` (4xx/5xx), and `unknown_error`.
 - **Actionable Diagnostic Hints:** Enriches structured `slog` JSON outputs with direct troubleshooting hints (`hint`) to lower Mean Time To Recovery (MTTR).
@@ -34,7 +35,7 @@ A cloud-native, platform-independent SRE telemetry stack written in Go. This pro
 ## Tech Stack & Architecture
 
 - **Go (Golang):** Core microservice architecture featuring native API probing and Prometheus instrumentation.
-- **Kubernetes:** Dynamic service discovery utilizing Kubernetes Informers.
+- **Kubernetes:** Event-driven target discovery utilizing modern `discoveryv1.EndpointSlice` Kubernetes Informers.
 - **Argo CD:** GitOps controller executing continuous delivery and automated cluster state synchronization.
 - **Prometheus & Grafana:** Full observability stack measuring the 4 Golden Signals.
 - **Alertmanager:** Production-ready alert routing with severity classification (`warning`, `critical`).
@@ -43,22 +44,28 @@ A cloud-native, platform-independent SRE telemetry stack written in Go. This pro
 
 ## Architecture Overview
 
-The `api-prober` microservice acts as the central observability engine, continuously monitoring the Kubernetes API for discoverable services and exporting comprehensive 4 Golden Signals telemetry.
+The `api-prober` microservice acts as the central observability engine. Using a Kubernetes Informer, it streams target changes directly from the API server into a local, thread-safe memory registry before executing HTTP/DNS probes and exporting 4 Golden Signals telemetry.
 
 ```text
-[ K8s API Server ] --(Informer)--> [ api-prober ] --(HTTP/DNS Probes)--> [ Target Services ]
-                                     |
-                            (Prometheus Metrics)
-                                     v
-                               [ Prometheus ]
-                                     |
-                                (Alert Rules)
-                                     v
-                               [ Alertmanager ]
-                                     |
-                          (Webhooks / PagerDuty / Slack)
-                                     v
-                               [ SRE On-Call ]
+[ K8s Control Plane ] --(EndpointSlice Watch Stream)--> [ api-prober Informer ]
+                                                                 |
+                                                    (Thread-Safe Local Registry)
+                                                                 |
+                                                    (Concurrent HTTP/DNS Probes)
+                                                                 v
+                                                        [ Target Services ]
+                                                                 |
+                                                        (Prometheus Metrics)
+                                                                 v
+                                                           [ Prometheus ]
+                                                                 |
+                                                            (Alert Rules)
+                                                                 v
+                                                           [ Alertmanager ]
+                                                                 |
+                                                      (Webhooks / Slack / Push)
+                                                                 v
+                                                           [ SRE On-Call ]
 ```
 
 ---
@@ -77,7 +84,7 @@ The `api-prober` microservice acts as the central observability engine, continuo
 │       ├── dashboards/     # Auto-provisioned Grafana Dashboards
 │       └── templates/      # K8s Resources & Alerting Rules
 ├── pkg/
-│   └── prober/             # Core HTTP Probing Engine, Metrics & 6-Tier Error Classification
+│   └── prober/             # Core HTTP Probing Engine, K8s EndpointSlice Informers & Metrics
 ├── Dockerfile              # Multi-stage, Multi-arch Build File
 ├── Makefile                # Complete Lifecycle Automation (k3d, Argo CD, Helm)
 ├── main.go                 # Entry Point & Dynamic K8s Service Watcher
