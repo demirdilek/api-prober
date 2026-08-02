@@ -76,9 +76,11 @@ The `api-prober` microservice acts as the central observability engine, continuo
 │   └── api-prober/         # Custom Helm Chart (Deployment, RBAC, ServiceMonitor, Dashboard)
 │       ├── dashboards/     # Auto-provisioned Grafana Dashboards
 │       └── templates/      # K8s Resources & Alerting Rules
+├── pkg/
+│   └── prober/             # Core HTTP Probing Engine, Metrics & 6-Tier Error Classification
 ├── Dockerfile              # Multi-stage, Multi-arch Build File
 ├── Makefile                # Complete Lifecycle Automation (k3d, Argo CD, Helm)
-├── main.go                 # Core Probing Engine & Dynamic K8s Service Watcher
+├── main.go                 # Entry Point & Dynamic K8s Service Watcher
 ├── main_test.go            # Unit and Integration Tests
 └── prom-stack-values.yaml  # Prometheus Stack & Alertmanager Routing Config
 ```
