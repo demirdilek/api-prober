@@ -34,6 +34,7 @@ vendor/
 *.pid
 grafana-storage/
 prometheus-data/
+prom-stack-values.local.yaml
 
 # ==========================================
 # Editors & IDEs

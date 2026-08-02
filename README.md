@@ -25,6 +25,9 @@ A cloud-native, platform-independent SRE telemetry stack written in Go. This pro
 - **GitOps Continuous Delivery:** Fully automated deployment, sync, and self-healing managed declaratively via Argo CD.
 - **Declarative Telemetry Stack:** Pre-configured Prometheus monitoring, Grafana sidecars, and Alertmanager routing via `prom-stack-values.yaml`.
 - **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down without dropping in-flight probes.
+- **Multi-Channel Alert Routing:** Dynamic Alertmanager routing featuring dual-channel notification delivery:
+  - **Slack:** Full audit trail and ChatOps visibility for all alert states (`warning`, `critical`, `RESOLVED`).
+  - **Pushover:** High-priority mobile push notifications (bypassing hardware silent switches via Priority 1) for `critical` incidents.
 
 ---
 
@@ -34,7 +37,7 @@ A cloud-native, platform-independent SRE telemetry stack written in Go. This pro
 - **Kubernetes:** Dynamic service discovery utilizing Kubernetes Informers.
 - **Argo CD:** GitOps controller executing continuous delivery and automated cluster state synchronization.
 - **Prometheus & Grafana:** Full observability stack measuring the 4 Golden Signals.
-- **Alertmanager & Pushover:** Real-time mobile alert notifications triggered by defined threshold violations.
+- **Alertmanager:** Production-ready alert routing with severity classification (`warning`, `critical`).
 
 ---
 
@@ -45,15 +48,15 @@ The `api-prober` microservice acts as the central observability engine, continuo
 ```text
 [ K8s API Server ] --(Informer)--> [ api-prober ] --(HTTP/DNS Probes)--> [ Target Services ]
                                      |
-                           (Prometheus Metrics)
+                            (Prometheus Metrics)
                                      v
                                [ Prometheus ]
                                      |
-                                 (Alert Rules)
+                                (Alert Rules)
                                      v
                                [ Alertmanager ]
                                      |
-                                 (Pushover API)
+                          (Webhooks / PagerDuty / Slack)
                                      v
                                [ SRE On-Call ]
 ```
@@ -142,38 +145,24 @@ Once background port-forwarding is active (`make forward-all`), access the Contr
 | ![Argo](assets/argo.png) | ![Prometheus](assets/prometheus.png) |
 
 | Grafana 4 Golden Signals Dashboard | Structured Slog Output |
-|f :---: | :---: |
+| :---: | :---: |
 | ![Grafana Dashboard](assets/grafana-dashboard.png) | ![Slog Output](assets/slog-output.png) |
 
 ---
 
 ## Alerting & Escalation
 
-Real-time notifications are managed via Prometheus Alertmanager based on thresholds of the 4 Golden Signals.
+Real-time telemetry evaluation is managed via Prometheus Alertmanager based on defined thresholds for the 4 Golden Signals. Alerts are pre-classified by severity (`warning` vs. `critical`) and can be seamlessly routed to Webhooks, PagerDuty, Opsgenie, or Slack.
 
-### Emergency Priority (iOS Silent Mode Bypass)
+### Simulating Alerts
 
-Alerts are pre-configured to escalate critical issues. To ensure critical operational alerts break through your phone's silent switch or "Do Not Disturb" focus modes:
+The setup allows you to simulate threshold violations for different Golden Signals out of the box:
 
-1. Open **Settings** on your iOS device.
-2. Navigate to **Pushover** -> **Notifications**.
-3. Enable **Allow Critical Alerts**.
+#### 1. High Latency Alert
 
-| Latency Threshold Alert | High Error Rate Escalation |
-| :---: | :---: |
-| ![Pushover 1](assets/pushover1.png) | ![Pushover 2](assets/pushover2.png) |
+The Helm chart automatically provisions a target called `httpbin-slow` which simulates delayed responses (`/delay/1`). Once Prometheus evaluates the high p99 latency threshold over the defined timeframe, Alertmanager triggers the `HighLatency` rule.
 
----
-
-## Simulating Alerts
-
-The setup allows you to simulate alerts for different Golden Signals:
-
-### 1. High Latency Alert
-
-The Helm chart automatically provisions a target called `httpbin-slow` which simulates delayed responses (`/delay/1`). Once Prometheus evaluates the high p99 latency threshold over the defined timeframe, Alertmanager will push a notification to your configured Pushover device.
-
-### 2. High Error Rate Alert (Dynamic Discovery & Error Target Simulation)
+#### 2. High Error Rate Alert (Dynamic Discovery & Error Target Simulation)
 
 You can trigger a real-time HTTP 500 error alert using the Makefile:
 
@@ -185,10 +174,10 @@ make test-alert
 make test-alert-clean
 ```
 
-The Go engine will dynamically pick up the new endpoint within 5 seconds and start probing it. Shortly after, the `HighErrorRate` rule will fire in Prometheus and escalate to Alertmanager.
+The Go engine will dynamically discover the new endpoint via Kubernetes API labels within 5 seconds and start probing it. Shortly after, the HighErrorRate rule fires in Prometheus and escalates to Alertmanager.
 
----
+### Multi-Channel Alert Routing Matrix
 
-## License
-
-[MIT License](https://opensource.org/licenses/MIT)
+| Slack Audit Trail (`#alerts`) | Pushover Lockscreen Alert | Pushover Detailed View |
+| :---: | :---: | :---: |
+| ![Slack Alert](assets/slack.png) | ![Pushover Push](assets/pushover1.png) | ![Pushover Detail](assets/pushover2.png) |

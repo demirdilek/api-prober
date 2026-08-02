@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass create-secrets test-alert test-alert-clean dev-enable dev-disable
+.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-alert test-alert-clean dev-enable dev-disable
 
 .DEFAULT_GOAL := help
 
@@ -61,13 +61,24 @@ clean-build: ## Force a clean build by wiping BuildKit cache
 	docker builder prune --all -f
 	docker build --no-cache -t $(IMAGE_REPO):$(IMAGE_TAG) .
 
-prometheus-install: ## 3. Install kube-prometheus-stack via Helm
+prometheus-install: ## Install/upgrade kube-prometheus-stack via Helm (supports local override & .env secrets)
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 	helm repo update
-	@if ! helm status prom-stack > /dev/null 2>&1; then \
-		helm install prom-stack prometheus-community/kube-prometheus-stack -f prom-stack-values.yaml; \
+	@if [ -f prom-stack-values.local.yaml ]; then \
+		echo "==> Applying Prometheus stack with local overrides and .env secrets..."; \
+		helm upgrade --install prom-stack prometheus-community/kube-prometheus-stack \
+			-f prom-stack-values.yaml \
+			-f prom-stack-values.local.yaml \
+			--set alertmanager.config.receivers[1].slack_configs[0].api_url=$(SLACK_WEBHOOK_URL) \
+			--set alertmanager.config.receivers[2].pushover_configs[0].user_key=$(PUSHOVER_USER_KEY) \
+			--set alertmanager.config.receivers[2].pushover_configs[0].token=$(PUSHOVER_API_TOKEN); \
 	else \
-		echo "Prometheus stack already installed."; \
+		echo "==> Applying base Prometheus stack configuration with .env secrets..."; \
+		helm upgrade --install prom-stack prometheus-community/kube-prometheus-stack \
+			-f prom-stack-values.yaml \
+			--set alertmanager.config.receivers[1].slack_configs[0].api_url=$(SLACK_WEBHOOK_URL) \
+			--set alertmanager.config.receivers[2].pushover_configs[0].user_key=$(PUSHOVER_USER_KEY) \
+			--set alertmanager.config.receivers[2].pushover_configs[0].token=$(PUSHOVER_API_TOKEN); \
 	fi
 
 install-argocd: ## 4. Install Argo CD components into the cluster
@@ -92,11 +103,11 @@ dev-disable: ## Re-enable Argo CD Auto-Sync & Self-Healing
 	@echo "==> Re-enabling Argo CD Auto-Sync for $(ARGO_APP)..."
 	kubectl patch application $(ARGO_APP) -n $(ARGO_NAMESPACE) --type merge -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
 
-local-deploy: dev-enable lint test docker-build create-secrets ## Fast local rebuild, import, pause GitOps, and rollout restart
+local-deploy: dev-enable lint test docker-build ## Fast local rebuild, import, pause GitOps, and rollout restart
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
 	kubectl rollout restart deployment $(RELEASE_NAME)
 
-all: k3d-up create-secrets docker-build prometheus-install install-argocd apply-gitops helm-install ## Bootstrap entire local stack out-of-the-box
+all: k3d-up docker-build prometheus-install install-argocd apply-gitops helm-install ## Bootstrap entire local stack out-of-the-box
 	@echo "========================================================="
 	@echo " api-prober stack is fully up and running out-of-the-box! "
 	@echo "========================================================="
@@ -144,14 +155,7 @@ stop-forward: ## Stop background port-forwarding
 
 argocd-pass: ## Retrieve initial admin password for Argo CD UI
 	@echo "==> Argo CD Initial Admin Password:"
-	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" | base64 -d; echo ""
-
-create-secrets: ## Create Kubernetes secret from local .env credentials
-	@echo "==> Creating pushover-credentials secret in k3d..."
-	@kubectl create secret generic pushover-credentials \
-		--from-literal=USER_KEY=$(PUSHOVER_USER_KEY) \
-		--from-literal=APP_TOKEN=$(PUSHOVER_API_TOKEN) \
-		--dry-run=client -o yaml | kubectl apply -f -
+	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d || echo "Initial secret deleted. Use custom patched password or check argocd-secret."
 
 hard-reset: clean all ## Deep clean cluster and rebuild stack fresh
 

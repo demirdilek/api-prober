@@ -20,14 +20,3 @@ spec:
             - containerPort: 8080
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          env:
-            - name: PUSHOVER_USER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: pushover-credentials
-                  key: USER_KEY
-            - name: PUSHOVER_APP_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: pushover-credentials
-                  key: APP_TOKEN

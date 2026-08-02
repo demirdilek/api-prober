@@ -23,28 +23,48 @@ grafana:
       default_home_dashboard_path: "/tmp/dashboards/api_prober_dashboard.json"
 
 alertmanager:
-  alertmanagerSpec:
-    secrets:
-      - pushover-credentials
   config:
     global:
       resolve_timeout: 5m
     route:
-      receiver: pushover
+      # Default receiver for all alerts
+      receiver: 'slack-notifications'
       group_by: ['alertname', 'severity']
-      group_wait: 30s
-      group_interval: 5m
+      group_wait: 10s
+      group_interval: 30s
       repeat_interval: 12h
       routes:
-        # Intercept the Watchdog alert and send it to the null receiver
         - matchers:
             - alertname = Watchdog
           receiver: 'null'
+
+        # Sub-route: Critical alerts also trigger Pushover without blocking Slack
+        - matchers:
+            - severity = critical
+          receiver: 'pushover-notifications'
+          continue: true
+
     receivers:
-      - name: pushover
-        pushover_configs:
-          # Mount secrets injected via Kubernetes Secret pushover-credentials)
-          - user_key_file: /etc/alertmanager/secrets/pushover-credentials/USER_KEY
-            token_file: /etc/alertmanager/secrets/pushover-credentials/APP_TOKEN
-            send_resolved: true
       - name: 'null'
+
+      - name: 'slack-notifications'
+        slack_configs:
+          - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+            send_resolved: true
+            title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+            text: >-
+              <!here>
+
+              *Time:* {{ (index .Alerts 0).StartsAt.Format "15:04:05 MST" }}
+
+              *Summary:* {{ .CommonAnnotations.summary }}
+
+      - name: 'pushover-notifications'
+        pushover_configs:
+          - user_key: 'YOUR_PUSHOVER_USER_KEY'
+            token: 'YOUR_PUSHOVER_API_TOKEN'
+            priority: '1' # Priority 1 bypasses silent mode on mobile devices
+            sound: 'alien'
+            send_resolved: true
+            title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+            message: '{{ .CommonAnnotations.summary }}'
