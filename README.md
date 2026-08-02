@@ -3,7 +3,7 @@
 [![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/api-prober?color=00ADD8&logo=go)](https://github.com/demirdilek/api-prober)
-[![Image Size](https://img.shields.io/badge/image%20size-15%20MB-blue?logo=docker)](https://github.com/demirdilek/api-prober/pkgs/container/api-prober)
+[![Image Size](https://img.shields.io/badge/image%20size-29.5%20MB-blue?logo=docker)](https://github.com/demirdilek/api-prober/pkgs/container/api-prober)
 
 A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation) for distributed Kubernetes environments.
 
@@ -183,10 +183,14 @@ make test-alert
 make test-alert-clean
 ```
 
-The Go engine will dynamically discover the new endpoint via Kubernetes API labels within 5 seconds and start probing it. Shortly after, the HighErrorRate rule fires in Prometheus and escalates to Alertmanager.
+The Go engine will dynamically discover the new endpoint instantly via its event-driven Kubernetes Informer stream and start probing it. Shortly after, the `HighErrorRate` rule fires in Prometheus and escalates to Alertmanager.
 
 ### Multi-Channel Alert Routing Matrix
 
 | Slack Audit Trail (`#alerts`) | Pushover Lockscreen Alert | Pushover Detailed View |
 | :---: | :---: | :---: |
 | ![Slack Alert](assets/slack.png) | ![Pushover Push](assets/pushover1.png) | ![Pushover Detail](assets/pushover2.png) |
+
+### Roadmap & Production Readiness
+
+Check out our [ROADMAP.md](ROADMAP.md) for planned features, upcoming architectural refinements, and production readiness milestones.
