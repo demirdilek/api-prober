@@ -8,6 +8,11 @@ kind: ClusterRole
 metadata:
   name: {{ .Release.Name }}-service-discovery
 rules:
+  # Permissions required for the EndpointSlice Informer
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  # Permissions required to read Service metadata/annotations
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch"]

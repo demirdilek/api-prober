@@ -13,10 +13,30 @@ spec:
         app: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ .Release.Name }}-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534 # nobody user
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
