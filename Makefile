@@ -1,11 +1,9 @@
 -include .env
 export
 
-.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass create-secrets test-alert test-alert-clean
+.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass create-secrets test-alert test-alert-clean dev-enable dev-disable
 
 .DEFAULT_GOAL := help
-
-# English comments as requested
 
 # Container registry configuration
 IMAGE_REPO=ghcr.io/demirdilek/api-prober
@@ -17,6 +15,10 @@ TAILSCALE_IP ?= $(shell tailscale ip -4 2>/dev/null || echo "localhost")
 # Helm variables
 RELEASE_NAME=api-prober
 CHART_DIR=./helm/api-prober
+
+# Argo CD variables
+ARGO_APP ?= api-prober
+ARGO_NAMESPACE ?= argocd
 
 help: ## Show this help message
 	@echo "Usage: make [target]"
@@ -82,7 +84,15 @@ apply-gitops: ## 5. Register the api-prober application in Argo CD
 helm-install: ## 6. Deploy application Helm chart (api-prober)
 	helm upgrade --install $(RELEASE_NAME) $(CHART_DIR)
 
-local-deploy: lint test docker-build create-secrets ## Fast local rebuild, import, and rollout restart
+dev-enable: ## Pause Argo CD Auto-Sync & Self-Healing for local debugging
+	@echo "==> Disabling Argo CD Auto-Sync for $(ARGO_APP)..."
+	kubectl patch application $(ARGO_APP) -n $(ARGO_NAMESPACE) --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+
+dev-disable: ## Re-enable Argo CD Auto-Sync & Self-Healing
+	@echo "==> Re-enabling Argo CD Auto-Sync for $(ARGO_APP)..."
+	kubectl patch application $(ARGO_APP) -n $(ARGO_NAMESPACE) --type merge -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
+
+local-deploy: dev-enable lint test docker-build create-secrets ## Fast local rebuild, import, pause GitOps, and rollout restart
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
 	kubectl rollout restart deployment $(RELEASE_NAME)
 

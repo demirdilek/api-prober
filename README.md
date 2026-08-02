@@ -2,42 +2,63 @@
 
 [![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/api-prober?color=00ADD8&logo=go)](https://github.com/demirdilek/api-prober)
+[![Image Size](https://img.shields.io/badge/image%20size-15%20MB-blue?logo=docker)](https://github.com/demirdilek/api-prober/pkgs/container/api-prober)
 
+A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation) for distributed Kubernetes environments.
 
-A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation) for distributed edge environments.
+---
 
-## Container Image Specs
-
-### 📦 Container Image Specs
-
-[![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/api-prober)](https://github.com/demirdilek/api-prober)
-[![Image Size](https://img.shields.io/badge/dynamic/json?color=blue&label=image%20size&query=%24.data.repository.packages.edges%5B0%5D.node.packageVersion.version&url=https%3A%2F%2Fghcr-badge.egress.workers.dev%2Fdemirdilek%2Fapi-prober)](https://github.com/demirdilek/api-prober/pkgs/container/api-prober)
+## 📦 Container Image Specs
 
 - **Registry:** `ghcr.io/demirdilek/api-prober:latest`
 - **Base Image:** `gcr.io/distroless/static`
+- **Architecture:** Multi-Arch (`amd64` / `arm64`)
 
-## Features
+---
 
-* **Dynamic Targets:** Monitored endpoints are dynamically discovered via Kubernetes API labels (probe=true) and custom path annotations (probe/path="/health").
-* **GitOps Continuous Delivery:** Fully automated deployment, sync, and self-healing managed declaratively via Argo CD.
-* **Enterprise Secret Management:** Fully decoupled credential management using HashiCorp Vault and External Secrets Operator (ESO). Secrets are injected as secure file mounts, preventing environment variable leaks.
-* **Configuration as Code:** The entire Prometheus monitoring stack is configured declaratively via `prom-stack-values.yaml`, preparing the project for GitOps workflows.
-* **Fully Encapsulated Stack:** Self-contained environment featuring Go, Prometheus, Alertmanager, Grafana, HashiCorp Vault, Argo CD, External Secrets Operator (ESO), and Httpbin.
-* **Multi-Stage & Multi-Arch Build:** Minimal Docker footprint supporting both `amd64` and `arm64` architectures.
-* **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down without dropping in-flight probes.
+## Key Features
+
+- **Dynamic K8s Targets:** Monitored endpoints are dynamically discovered via Kubernetes API labels (`probe=true`) and custom path annotations (`probe/path="/healthz"`).
+- **6-Tier SRE Error Classification:** Categorizes failures into discrete buckets: `dns_error`, `connection_refused`, `tls_error`, `timeout`, `http_error` (4xx/5xx), and `unknown_error`.
+- **Actionable Diagnostic Hints:** Enriches structured `slog` JSON outputs with direct troubleshooting hints (`hint`) to lower Mean Time To Recovery (MTTR).
+- **GitOps Continuous Delivery:** Fully automated deployment, sync, and self-healing managed declaratively via Argo CD.
+- **Declarative Telemetry Stack:** Pre-configured Prometheus monitoring, Grafana sidecars, and Alertmanager routing via `prom-stack-values.yaml`.
+- **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down without dropping in-flight probes.
+
+---
 
 ## Tech Stack & Architecture
 
-* **Go (Golang):** Core microservice architecture featuring native API probing and Prometheus instrumentation.
-* **Kubernetes:** Dynamic service discovery utilizing Kubernetes API annotations.
-* **Argo CD:** GitOps controller executing continuous delivery and automated cluster state synchronization.
-* **HashiCorp Vault:** Centralized and secure secrets management for sensitive credentials.
-* **External Secrets Operator (ESO):** Automated synchronization of secrets from HashiCorp Vault into native Kubernetes Secrets.
-* **Prometheus & Grafana:** Full observability stack measuring the 4 Golden Signals.
-* **Alertmanager & Pushover:** Real-time mobile alert notifications triggered by defined threshold violations.
+- **Go (Golang):** Core microservice architecture featuring native API probing and Prometheus instrumentation.
+- **Kubernetes:** Dynamic service discovery utilizing Kubernetes Informers.
+- **Argo CD:** GitOps controller executing continuous delivery and automated cluster state synchronization.
+- **Prometheus & Grafana:** Full observability stack measuring the 4 Golden Signals.
+- **Alertmanager & Pushover:** Real-time mobile alert notifications triggered by defined threshold violations.
 
-> **Secret Management Flow:**  
-> Sensitive credentials (e.g., Pushover User Key and App Token) are stored securely in HashiCorp Vault and synced directly into Kubernetes Secrets via the External Secrets Operator (ESO).
+---
+
+## Architecture Overview
+
+The `api-prober` microservice acts as the central observability engine, continuously monitoring the Kubernetes API for discoverable services and exporting comprehensive 4 Golden Signals telemetry.
+
+```text
+[ K8s API Server ] --(Informer)--> [ api-prober ] --(HTTP/DNS Probes)--> [ Target Services ]
+                                     |
+                           (Prometheus Metrics)
+                                     v
+                               [ Prometheus ]
+                                     |
+                                 (Alert Rules)
+                                     v
+                               [ Alertmanager ]
+                                     |
+                                 (Pushover API)
+                                     v
+                               [ SRE On-Call ]
+```
+
+---
 
 ## Project Structure
 
@@ -53,38 +74,43 @@ A cloud-native, platform-independent SRE telemetry stack written in Go. This pro
 │       ├── dashboards/     # Auto-provisioned Grafana Dashboards
 │       └── templates/      # K8s Resources & Alerting Rules
 ├── Dockerfile              # Multi-stage, Multi-arch Build File
-├── Makefile                # Complete Lifecycle Automation (k3d, Vault, ESO, Argo CD)
+├── Makefile                # Complete Lifecycle Automation (k3d, Argo CD, Helm)
 ├── main.go                 # Core Probing Engine & Dynamic K8s Service Watcher
 ├── main_test.go            # Unit and Integration Tests
-├── prom-stack-values.yaml  # Prometheus Stack & Alertmanager Routing Config
-└── vault-store.yaml        # External Secrets Operator (ESO) SecretStore Mapping
+└── prom-stack-values.yaml  # Prometheus Stack & Alertmanager Routing Config
 ```
 
-### Vault Operational Status
-
-Verify that HashiCorp Vault is initialized and unsealed:
-
-![Vault Status](assets/vault-status.png)
+---
 
 ## Getting Started
 
 ### Prerequisites
 
-* Docker
-* k3d / Kubernetes
-* Helm
-* GNU Make
-* HashiCorp Vault (runs locally in dev mode via Docker; no local CLI installation required)
+- Docker / Buildx
+- k3d / Kubernetes
+- Helm 3+
+- GNU Make
+
+---
 
 ## Local Cluster Lifecycle & Deployment
 
-### You can manage the local development cluster and the entire stack lifecycle using the provided Makefile
+You can manage the local development cluster and the entire stack lifecycle using the provided `Makefile`:
 
 ```bash
-# Spin up the entire stack from scratch (k3d, Vault, Docker build, ESO, Prometheus, Argo CD, Helm deployment)
+# Spin up the entire stack from scratch (k3d, Docker build, Prometheus, Argo CD, Helm deployment)
 make all
 
-# Delete local k3d cluster, stop Vault containers, and clean up local artifacts
+# Fast local rebuild, import, pause GitOps auto-sync, and rollout restart for local debugging
+make local-deploy
+
+# Pause Argo CD Auto-Sync & Self-Healing for local debugging
+make dev-enable
+
+# Re-enable Argo CD Auto-Sync & Self-Healing
+make dev-disable
+
+# Delete local k3d cluster and clean up local artifacts
 make clean
 
 # Start background port-forwarding for Argo CD (8080), Prometheus (9090), and Grafana (3000)
@@ -99,20 +125,27 @@ make test
 
 ![Kubernetes Pods](assets/pods.png)
 
+---
+
 ## Observability & Dashboards
 
 The Grafana dashboard is **fully auto-provisioned out of the box** via the Prometheus Operator sidecar mechanism (`grafana_dashboard: "1"`), requiring zero manual JSON imports or configuration. It visualizes real-time telemetry for all 4 Golden Signals: Latency, Traffic, Errors, and Saturation.
 
 Once background port-forwarding is active (`make forward-all`), access the Control Plane UIs via your browser or Tailscale network:
 
-* Argo CD: `https://localhost:8080` (or https://<TAILSCALE_IP>:8080)
-* Prometheus: `http://localhost:9090` (or http://<TAILSCALE_IP>:9090)
-* Grafana: `http://localhost:3000` (or http://<TAILSCALE_IP>:3000)
+- **Argo CD:** [https://localhost:8080](https://localhost:8080) or [https://<TAILSCALE_IP>:8080](https://<TAILSCALE_IP>:8080)
+- **Prometheus:** [http://localhost:9090](http://localhost:9090) or [http://<TAILSCALE_IP>:9090](http://<TAILSCALE_IP>:9090)
+- **Grafana:** [http://localhost:3000](http://localhost:3000) or [http://<TAILSCALE_IP>:3000](http://<TAILSCALE_IP>:3000)
 
-![Argo](assets/argo.png)
-![Prometheus](assets/prometheus.png)
-![Grafana Dashboard](assets/grafana-dashboard.png)
-![Slog Output](assets/slog-output.png)
+| Argo CD Control Plane | Prometheus Target Telemetry |
+| :---: | :---: |
+| ![Argo](assets/argo.png) | ![Prometheus](assets/prometheus.png) |
+
+| Grafana 4 Golden Signals Dashboard | Structured Slog Output |
+|f :---: | :---: |
+| ![Grafana Dashboard](assets/grafana-dashboard.png) | ![Slog Output](assets/slog-output.png) |
+
+---
 
 ## Alerting & Escalation
 
@@ -122,13 +155,15 @@ Real-time notifications are managed via Prometheus Alertmanager based on thresho
 
 Alerts are pre-configured to escalate critical issues. To ensure critical operational alerts break through your phone's silent switch or "Do Not Disturb" focus modes:
 
-* Open Settings on your iOS device.
-* Navigate to Pushover -> Notifications.
-* Enable Allow Critical Alerts.
+1. Open **Settings** on your iOS device.
+2. Navigate to **Pushover** -> **Notifications**.
+3. Enable **Allow Critical Alerts**.
 
-| Notification 1 | Notification 2 |
+| Latency Threshold Alert | High Error Rate Escalation |
 | :---: | :---: |
 | ![Pushover 1](assets/pushover1.png) | ![Pushover 2](assets/pushover2.png) |
+
+---
 
 ## Simulating Alerts
 
@@ -138,36 +173,22 @@ The setup allows you to simulate alerts for different Golden Signals:
 
 The Helm chart automatically provisions a target called `httpbin-slow` which simulates delayed responses (`/delay/1`). Once Prometheus evaluates the high p99 latency threshold over the defined timeframe, Alertmanager will push a notification to your configured Pushover device.
 
-### 2. High Error Rate Alert (Dynamic Discovery)
+### 2. High Error Rate Alert (Dynamic Discovery & Error Target Simulation)
 
-You can test the dynamic service discovery and error alerting by creating a custom target that returns HTTP 500 errors.
-
-Simply deploy a service with the `probe="true"` label and the `probe/path="/status/500"` annotation:
+You can trigger a real-time HTTP 500 error alert using the Makefile:
 
 ```bash
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: httpbin-error
-  labels:
-    app: httpbin
-    probe: "true"
-  annotations:
-    probe/path: "/status/500"
-spec:
-  ports:
-    - port: 80
-      targetPort: 8080
-  selector:
-    app: httpbin
-EOF
+# Deploy an artificial error target (HTTP 500)
+make test-alert
+
+# Clean up the error target after testing
+make test-alert-clean
 ```
 
-The Go engine will dynamically pick up the new endpoint within 5 seconds and start probing it. Shortly after, the HighErrorRate rule will fire in Prometheus and escalate to Alertmanager.
+The Go engine will dynamically pick up the new endpoint within 5 seconds and start probing it. Shortly after, the `HighErrorRate` rule will fire in Prometheus and escalate to Alertmanager.
 
-To clean up and remove the failing endpoint once tested:
+---
 
-```bash
-kubectl delete service httpbin-error
-```
+## License
+
+[MIT License](https://opensource.org/licenses/MIT)

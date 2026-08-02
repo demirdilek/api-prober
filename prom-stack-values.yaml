@@ -1,10 +1,10 @@
 # prom-stack-values.yaml
-# Deaktiviert den Node-Exporter, da er in K3d oft fehlschlägt
+
+# Deactivate the Node Exporter, as it is not needed for this setup and can cause unnecessary alerts in K3d environments.
 nodeExporter:
   enabled: false
 
-# Pro-Tipp für K3d: Diese drei K8s-internen Komponenten sind in K3d 
-# nach außen hin oft nicht scrape-bar und werfen früher oder später ebenfalls TargetDown-Alarme.
+# Pro-Tipp: In K3d, the kube-controller-manager, kube-scheduler, and kube-proxy components are often not scrapeable from outside and can trigger TargetDown alerts. Therefore, they are disabled in this configuration.
 kubeControllerManager:
   enabled: false
 kubeScheduler:
@@ -43,7 +43,7 @@ alertmanager:
     receivers:
       - name: pushover
         pushover_configs:
-          # Mount secrets directly from the filesystem injected by External Secrets Operator
+          # Mount secrets injected via Kubernetes Secret pushover-credentials)
           - user_key_file: /etc/alertmanager/secrets/pushover-credentials/USER_KEY
             token_file: /etc/alertmanager/secrets/pushover-credentials/APP_TOKEN
             send_resolved: true
