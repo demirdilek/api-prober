@@ -20,7 +20,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/demirdilek/api-prober/pkg/prober"
+	"github.com/demirdilek/kube-prober/pkg/prober"
 )
 
 var (
@@ -313,7 +313,7 @@ func main() {
 
 	_ = srv.Shutdown(shutdownCtx)
 	wg.Wait()
-	slog.Info("api-prober stack components stopped cleanly. Goodbye.")
+	slog.Info("kube-prober stack components stopped cleanly. Goodbye.")
 }
 
 func contains(slice []string, key string) bool {

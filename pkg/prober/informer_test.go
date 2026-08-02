@@ -9,7 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/demirdilek/api-prober/pkg/prober"
+	"github.com/demirdilek/kube-prober/pkg/prober"
 )
 
 func TestTargetWatcher_InformerEvents(t *testing.T) {

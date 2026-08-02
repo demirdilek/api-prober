@@ -1,4 +1,4 @@
-module github.com/demirdilek/api-prober
+module github.com/demirdilek/kube-prober
 
 go 1.26.1
 

@@ -1,16 +1,16 @@
 # Production Readiness Roadmap
 
-This document outlines the planned improvements, architectural refinements, and feature milestones for `api-prober`.
+This document outlines the planned improvements, architectural refinements, and feature milestones for `kube-prober`.
 
 ---
 
 ## Phase 1: High Priority (Bugs & Security Hardening)
 
-- [X] **RBAC Permissions Update (`helm/api-prober/templates/rbac.yaml`)**
+- [X] **RBAC Permissions Update (`helm/kube-prober/templates/rbac.yaml`)**
   - Add `endpointslices` under the `discovery.k8s.io` API group to prevent HTTP 403 (Forbidden) errors during Informer synchronization inside Kubernetes clusters.
-- [ ] **Kubernetes Probes Configuration (`helm/api-prober/templates/deployment.yaml`)**
+- [ ] **Kubernetes Probes Configuration (`helm/kube-prober/templates/deployment.yaml`)**
   - Integrate native `livenessProbe` (`/healthz`) and `readinessProbe` (`/readyz`) endpoints into the deployment spec.
-- [ ] **Pod Security Context Hardening (`helm/api-prober/templates/deployment.yaml`)**
+- [ ] **Pod Security Context Hardening (`helm/kube-prober/templates/deployment.yaml`)**
   - Enforce non-root execution (`runAsNonRoot: true`), read-only root filesystems (`readOnlyRootFilesystem: true`), and drop all unneeded Linux capabilities (`capabilities.drop: ["ALL"]`).
 
 ---

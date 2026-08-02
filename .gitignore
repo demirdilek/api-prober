@@ -1,8 +1,8 @@
 # ==========================================
 # Go Binaries & Build Output
 # ==========================================
-# Root binary (mit / damit helm/api-prober nicht blockiert wird)
-/api-prober
+# Root binary (mit / damit helm/kube-prober nicht blockiert wird)
+/kube-prober
 bin/
 dist/
 out/

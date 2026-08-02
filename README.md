@@ -1,9 +1,9 @@
-# api-prober
+# kube-prober
 
-[![CI](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/api-prober/actions/workflows/ci.yml)
+[![CI](https://github.com/demirdilek/kube-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/kube-prober/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/api-prober?color=00ADD8&logo=go)](https://github.com/demirdilek/api-prober)
-[![Image Size](https://img.shields.io/badge/image%20size-29.5%20MB-blue?logo=docker)](https://github.com/demirdilek/api-prober/pkgs/container/api-prober)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/kube-prober?color=00ADD8&logo=go)](https://github.com/demirdilek/kube-prober)
+[![Image Size](https://img.shields.io/badge/image%20size-29.5%20MB-blue?logo=docker)](https://github.com/demirdilek/kube-prober/pkgs/container/kube-prober)
 
 A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation) for distributed Kubernetes environments.
 
@@ -11,7 +11,7 @@ A cloud-native, platform-independent SRE telemetry stack written in Go. This pro
 
 ## 📦 Container Image Specs
 
-- **Registry:** `ghcr.io/demirdilek/api-prober:latest`
+- **Registry:** `ghcr.io/demirdilek/kube-prober:latest`
 - **Base Image:** `gcr.io/distroless/static`
 - **Architecture:** Multi-Arch (`amd64` / `arm64`)
 
@@ -44,10 +44,10 @@ A cloud-native, platform-independent SRE telemetry stack written in Go. This pro
 
 ## Architecture Overview
 
-The `api-prober` microservice acts as the central observability engine. Using a Kubernetes Informer, it streams target changes directly from the API server into a local, thread-safe memory registry before executing HTTP/DNS probes and exporting 4 Golden Signals telemetry.
+The `kube-prober` microservice acts as the central observability engine. Using a Kubernetes Informer, it streams target changes directly from the API server into a local, thread-safe memory registry before executing HTTP/DNS probes and exporting 4 Golden Signals telemetry.
 
 ```text
-[ K8s Control Plane ] --(EndpointSlice Watch Stream)--> [ api-prober Informer ]
+[ K8s Control Plane ] --(EndpointSlice Watch Stream)--> [ kube-prober Informer ]
                                                                  |
                                                     (Thread-Safe Local Registry)
                                                                  |
@@ -80,7 +80,7 @@ The `api-prober` microservice acts as the central observability engine. Using a 
 ├── deploy/
 │   └── argocd/             # Argo CD Application Manifests (GitOps)
 ├── helm/
-│   └── api-prober/         # Custom Helm Chart (Deployment, RBAC, ServiceMonitor, Dashboard)
+│   └── kube-prober/         # Custom Helm Chart (Deployment, RBAC, ServiceMonitor, Dashboard)
 │       ├── dashboards/     # Auto-provisioned Grafana Dashboards
 │       └── templates/      # K8s Resources & Alerting Rules
 ├── pkg/

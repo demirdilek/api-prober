@@ -53,4 +53,3 @@ func TestDispatcher(t *testing.T) {
 		})
 	}
 }
-

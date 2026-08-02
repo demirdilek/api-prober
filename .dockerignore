@@ -2,6 +2,6 @@
 .github
 bin/
 dist/
-api-prober
+kube-prober
 *.out
 *.log

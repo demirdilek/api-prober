@@ -47,4 +47,3 @@ func (d *Dispatcher) Execute(ctx context.Context, target string) ErrorCategory {
 	// Direct execution via function pointer
 	return fn(ctx, target)
 }
-

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/demirdilek/api-prober/pkg/prober"
+	"github.com/demirdilek/kube-prober/pkg/prober"
 )
 
 // English comments as preferred

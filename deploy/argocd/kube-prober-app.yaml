@@ -1,16 +1,16 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: api-prober
+  name: kube-prober
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/demirdilek/api-prober.git'
+    repoURL: 'https://github.com/demirdilek/kube-prober.git'
     targetRevision: HEAD
-    path: 'helm/api-prober'
+    path: 'helm/kube-prober'
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: default

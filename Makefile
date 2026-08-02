@@ -6,18 +6,18 @@ export
 .DEFAULT_GOAL := help
 
 # Container registry configuration
-IMAGE_REPO=ghcr.io/demirdilek/api-prober
+IMAGE_REPO=ghcr.io/demirdilek/kube-prober
 IMAGE_TAG=dev
 
 ARGOCD_MANIFEST_URL ?= https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 TAILSCALE_IP ?= $(shell tailscale ip -4 2>/dev/null || echo "localhost")
 
 # Helm variables
-RELEASE_NAME=api-prober
-CHART_DIR=./helm/api-prober
+RELEASE_NAME=kube-prober
+CHART_DIR=./helm/kube-prober
 
 # Argo CD variables
-ARGO_APP ?= api-prober
+ARGO_APP ?= kube-prober
 ARGO_NAMESPACE ?= argocd
 
 help: ## Show this help message
@@ -88,11 +88,11 @@ install-argocd: ## 4. Install Argo CD components into the cluster
 	@echo "==> Waiting for Argo CD components to be ready..."
 	kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=300s
 
-apply-gitops: ## 5. Register the api-prober application in Argo CD
-	@echo "==> Registering api-prober Application in Argo CD..."
-	kubectl apply -f deploy/argocd/api-prober-app.yaml
+apply-gitops: ## 5. Register the kube-prober application in Argo CD
+	@echo "==> Registering kube-prober Application in Argo CD..."
+	kubectl apply -f deploy/argocd/kube-prober-app.yaml
 
-helm-install: ## 6. Deploy application Helm chart (api-prober)
+helm-install: ## 6. Deploy application Helm chart (kube-prober)
 	helm upgrade --install $(RELEASE_NAME) $(CHART_DIR)
 
 dev-enable: ## Pause Argo CD Auto-Sync & Self-Healing for local debugging
@@ -109,13 +109,13 @@ local-deploy: dev-enable lint test docker-build ## Fast local rebuild, import, p
 
 all: k3d-up docker-build prometheus-install install-argocd apply-gitops helm-install ## Bootstrap entire local stack out-of-the-box
 	@echo "========================================================="
-	@echo " api-prober stack is fully up and running out-of-the-box! "
+	@echo " kube-prober stack is fully up and running out-of-the-box! "
 	@echo "========================================================="
 
-helm-upgrade: ## Upgrade existing api-prober Helm release
+helm-upgrade: ## Upgrade existing kube-prober Helm release
 	helm upgrade $(RELEASE_NAME) $(CHART_DIR)
 
-helm-uninstall: ## Remove api-prober Helm release
+helm-uninstall: ## Remove kube-prober Helm release
 	helm uninstall $(RELEASE_NAME) || true
 
 k3d-down: ## Delete local k3d cluster

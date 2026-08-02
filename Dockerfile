@@ -16,7 +16,7 @@ RUN go mod download
 COPY . .
 
 # Build statically compiled and stripped binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o api-prober .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o kube-prober .
 
 # ---------------------------------------------------
 # Stage 2: Minimal runtime image (~18 MB)
@@ -29,7 +29,7 @@ WORKDIR /app
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Copy the compiled binary
-COPY --from=builder /app/api-prober /app/api-prober
+COPY --from=builder /app/kube-prober /app/kube-prober
 
 # Run application
-ENTRYPOINT ["/app/api-prober"]
+ENTRYPOINT ["/app/kube-prober"]
