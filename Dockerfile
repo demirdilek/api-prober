@@ -1,14 +1,14 @@
 # ---------------------------------------------------
 # Stage 1: Build environment
 # ---------------------------------------------------
-FROM golang:1.26-alpine AS builder
+FROM golang:alpine AS builder
 
 WORKDIR /app
 
-# Install CA certificates for outgoing HTTPS requests (Pushover, webhooks)
+# Install CA certificates for outgoing HTTPS requests
 RUN apk add --no-cache ca-certificates
 
-# Cache dependencies (re-run only when go.mod or go.sum changes)
+# Cache dependencies
 COPY go.mod go.sum ./
 RUN go mod download
 

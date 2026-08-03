@@ -5,21 +5,23 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/kube-prober?color=00ADD8&logo=go)](https://github.com/demirdilek/kube-prober)
 [![Image Size](https://img.shields.io/badge/image%20size-29.5%20MB-blue?logo=docker)](https://github.com/demirdilek/kube-prober/pkgs/container/kube-prober)
 
-A cloud-native, platform-independent SRE telemetry stack written in Go. This project implements and visualizes the **4 Golden Signals** (Latency, Traffic, Errors, Saturation) for distributed Kubernetes environments.
+`kube-prober` is a lightweight Kubernetes-native probing controller written in Go. It dynamically discovers endpoints via Kubernetes `EndpointSlices` using a `SharedInformer` and performs health and performance probes using a concurrency-safe worker pool. Metrics (4 Golden Signals) and lifecycle endpoints are exposed for Prometheus integration.
 
 ---
 
 ## 📦 Container Image Specs
 
 - **Registry:** `ghcr.io/demirdilek/kube-prober:latest`
-- **Base Image:** `gcr.io/distroless/static`
+- **Base Image:** `scratch` (Minimalist & secure zero-OS runtime)
 - **Architecture:** Multi-Arch (`amd64` / `arm64`)
 
 ---
 
 ## Key Features
 
-- **Event-Driven K8s Target Discovery:** Replaces high-overhead API polling with modern `discoveryv1.EndpointSlice` Kubernetes Informers. Targets are added, updated, or removed in real-time with zero latency and zero unnecessary network polling against etcd.
+- **Event-Driven K8s Target Discovery:** Replaces high-overhead API polling with modern `discoveryv1.EndpointSlice` Kubernetes Informers.
+  - Monitored endpoints are filtered by the Service label `probe: "true"`.
+  - Custom paths can be annotated via `probe/path: "/healthz"`.
 - **Dynamic K8s Targets:** Monitored endpoints are dynamically discovered via Kubernetes API labels (`probe=true`) and custom path annotations (`probe/path="/healthz"`).
 - **6-Tier SRE Error Classification:** Categorizes failures into discrete buckets: `dns_error`, `connection_refused`, `tls_error`, `timeout`, `http_error` (4xx/5xx), and `unknown_error`.
 - **Actionable Diagnostic Hints:** Enriches structured `slog` JSON outputs with direct troubleshooting hints (`hint`) to lower Mean Time To Recovery (MTTR).
@@ -85,6 +87,7 @@ The `kube-prober` microservice acts as the central observability engine. Using a
 │       └── templates/      # K8s Resources & Alerting Rules
 ├── pkg/
 │   └── prober/             # Core HTTP Probing Engine, K8s EndpointSlice Informers & Metrics
+│   └── server/             # Health, Readiness, Pprof & Metrics HTTP Server
 ├── Dockerfile              # Multi-stage, Multi-arch Build File
 ├── Makefile                # Complete Lifecycle Automation (k3d, Argo CD, Helm)
 ├── main.go                 # Entry Point & Dynamic K8s Service Watcher
@@ -173,7 +176,8 @@ The Helm chart automatically provisions a target called `httpbin-slow` which sim
 
 #### 2. High Error Rate Alert (Dynamic Discovery & Error Target Simulation)
 
-You can trigger a real-time HTTP 500 error alert using the Makefile:
+You can trigger a real-time HTTP 500 error alert using the Makefile.
+Deploy an artificial error target with the required `probe: "true"` label:
 
 ```bash
 # Deploy an artificial error target (HTTP 500)

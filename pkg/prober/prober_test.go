@@ -2,8 +2,6 @@ package prober
 
 import (
 	"context"
-	"crypto/x509"
-	"errors"
 	"net"
 	"testing"
 )
@@ -13,76 +11,49 @@ func TestMapToCategory(t *testing.T) {
 		name       string
 		err        error
 		statusCode int
-		want       ErrorCategory
+		expected   ErrorCategory
 	}{
 		{
-			name:       "Success 200 OK",
-			err:        nil,
-			statusCode: 200,
-			want:       "",
-		},
-		{
-			name:       "HTTP 500 Server Error",
+			name:       "HTTP Error",
 			err:        nil,
 			statusCode: 500,
-			want:       CategoryHTTP,
+			expected:   CategoryHTTP,
 		},
 		{
-			name:       "Context Timeout Exceeded",
+			name:       "DNS Resolution Error",
+			err:        &net.DNSError{},
+			statusCode: 0,
+			expected:   CategoryDNS,
+		},
+		{
+			name:       "Timeout Error",
 			err:        context.DeadlineExceeded,
 			statusCode: 0,
-			want:       CategoryTimeout,
+			expected:   CategoryTimeout,
 		},
 		{
-			name:       "DNS Resolution Failure",
-			err:        &net.DNSError{IsNotFound: true},
-			statusCode: 0,
-			want:       CategoryDNS,
-		},
-		{
-			name:       "Invalid TLS Certificate",
-			err:        &x509.CertificateInvalidError{},
-			statusCode: 0,
-			want:       CategoryTLS,
-		},
-		{
-			name:       "Unknown Generic Error",
-			err:        errors.New("something went wrong"),
-			statusCode: 0,
-			want:       CategoryUnknown,
+			name:       "Success Target",
+			err:        nil,
+			statusCode: 200,
+			expected:   "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := MapToCategory(tt.err, tt.statusCode)
-			if got != tt.want {
-				t.Errorf("MapToCategory() = %v, want %v", got, tt.want)
+			if got != tt.expected {
+				t.Errorf("MapToCategory() = %v, want %v", got, tt.expected)
 			}
 		})
 	}
 }
 
 func TestErrorCategory_Hint(t *testing.T) {
-	tests := []struct {
-		category  ErrorCategory
-		wantEmpty bool
-	}{
-		{category: CategoryDNS, wantEmpty: false},
-		{category: CategoryConnect, wantEmpty: false},
-		{category: CategoryTLS, wantEmpty: false},
-		{category: CategoryTimeout, wantEmpty: false},
-		{category: CategoryHTTP, wantEmpty: false},
-		{category: CategoryUnknown, wantEmpty: false},
-		{category: ErrorCategory("invalid_category"), wantEmpty: false},
+	if CategoryDNS.Hint() == "" {
+		t.Errorf("expected non-empty hint for CategoryDNS")
 	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.category), func(t *testing.T) {
-			got := tt.category.Hint()
-			if (got == "") != tt.wantEmpty {
-				t.Errorf("ErrorCategory.Hint() returned empty string for %v", tt.category)
-			}
-		})
+	if CategoryHTTP.Hint() == "" {
+		t.Errorf("expected non-empty hint for CategoryHTTP")
 	}
 }

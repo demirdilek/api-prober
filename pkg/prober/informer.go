@@ -32,15 +32,24 @@ func (w *TargetWatcher) Start(ctx context.Context) error {
 	// Modern EndpointSlice Informer (Kubernetes 1.21+ / replacement for corev1.Endpoints)
 	endpointSliceInformer := factory.Discovery().V1().EndpointSlices().Informer()
 
-	_, err := endpointSliceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+_, err := endpointSliceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
-				w.registry.UpdateFromEndpointSlice(slice)
+				// Only process EndpointSlices marked for probing
+				if slice.Labels["probe"] == "true" {
+					w.registry.UpdateFromEndpointSlice(slice)
+				}
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			if newSlice, ok := newObj.(*discoveryv1.EndpointSlice); ok {
-				w.registry.UpdateFromEndpointSlice(newSlice)
+				// If the label is still present, update the registry
+				if newSlice.Labels["probe"] == "true" {
+					w.registry.UpdateFromEndpointSlice(newSlice)
+				} else {
+					// If the label was removed from the target, remove it from the registry
+					w.registry.RemoveEndpointSlice(newSlice)
+				}
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
@@ -56,7 +65,10 @@ func (w *TargetWatcher) Start(ctx context.Context) error {
 					return
 				}
 			}
-			w.registry.RemoveEndpointSlice(slice)
+			// Clean up target if it was being probed
+			if slice.Labels["probe"] == "true" {
+				w.registry.RemoveEndpointSlice(slice)
+			}
 		},
 	})
 	if err != nil {

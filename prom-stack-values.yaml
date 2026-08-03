@@ -20,7 +20,7 @@ grafana:
   grafana.ini:
     dashboards:
       # Force Grafana to use the dashboard as the default home screen
-      default_home_dashboard_path: "/tmp/dashboards/api_prober_dashboard.json"
+      default_home_dashboard_path: "/tmp/dashboards/kube_prober_dashboard.json"
 
 alertmanager:
   config:

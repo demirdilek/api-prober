@@ -1,0 +1,42 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: "{{ .Release.Name }}-rules"
+  labels:
+    release: prom-stack
+spec:
+  groups:
+    - name: kube-prober-golden-signals
+      rules:
+        # 1. Latency: High p99 Latency
+        - alert: HighLatency
+          expr: histogram_quantile(0.99, sum(rate(kube_prober_latency_seconds_bucket[5m])) by (le, target)) > 1.5
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: '{{`High p99 latency on target {{ $labels.target }}`}}'
+        # 2. Traffic: Traffic Collapse / No Probes Executing
+        - alert: TrafficCollapse
+          expr: sum(rate(kube_prober_traffic_total[2m])) by (target) == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{`Traffic collapse on target {{ $labels.target }}`}}'
+        # 3. Errors: High failure rate
+        - alert: HighErrorRate
+          expr: sum(increase(kube_prober_errors_total[2m])) by (target) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{`High error rate detected on target {{ $labels.target }}`}}'
+        # 4. Saturation: Worker Capacity Reached (Dynamic threshold at >= 90%)
+        - alert: MaxWorkersReached
+          expr: (sum(kube_prober_saturation_active_workers) / max(kube_prober_saturation_max_workers)) >= 0.9
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Prober worker capacity saturated (>= 90% of max workers utilized)"

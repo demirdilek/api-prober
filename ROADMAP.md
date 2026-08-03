@@ -8,9 +8,9 @@ This document outlines the planned improvements, architectural refinements, and 
 
 - [X] **RBAC Permissions Update (`helm/kube-prober/templates/rbac.yaml`)**
   - Add `endpointslices` under the `discovery.k8s.io` API group to prevent HTTP 403 (Forbidden) errors during Informer synchronization inside Kubernetes clusters.
-- [ ] **Kubernetes Probes Configuration (`helm/kube-prober/templates/deployment.yaml`)**
+- [X] **Kubernetes Probes Configuration (`helm/kube-prober/templates/deployment.yaml`)**
   - Integrate native `livenessProbe` (`/healthz`) and `readinessProbe` (`/readyz`) endpoints into the deployment spec.
-- [ ] **Pod Security Context Hardening (`helm/kube-prober/templates/deployment.yaml`)**
+- [X] **Pod Security Context Hardening (`helm/kube-prober/templates/deployment.yaml`)**
   - Enforce non-root execution (`runAsNonRoot: true`), read-only root filesystems (`readOnlyRootFilesystem: true`), and drop all unneeded Linux capabilities (`capabilities.drop: ["ALL"]`).
 
 ---

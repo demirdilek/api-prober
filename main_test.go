@@ -1,121 +1,93 @@
 package main
 
 import (
-	"context"
-	"net/http"
-	"net/http/httptest"
 	"os"
-	"sync"
+	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/demirdilek/kube-prober/pkg/prober"
 )
 
-// English comments as preferred
-
-func TestContains(t *testing.T) {
-	slice := []string{"http://service-a", "http://service-b", "http://service-c"}
-
-	if !contains(slice, "http://service-b") {
-		t.Errorf("Expected slice to contain 'http://service-b'")
-	}
-
-	if contains(slice, "http://service-d") {
-		t.Errorf("Did not expect slice to contain 'http://service-d'")
-	}
-}
+// English comments as requested
 
 func TestGetEnvAsInt(t *testing.T) {
-	envKey := "TEST_WORKERS_COUNT"
-	defaultVal := 50
-
-	// Test default value when env is empty
-	os.Unsetenv(envKey)
-	if val := getEnvAsInt(envKey, defaultVal); val != defaultVal {
-		t.Errorf("Expected default value %d, got %d", defaultVal, val)
+	tests := []struct {
+		name         string
+		envKey       string
+		envVal       string
+		defaultVal   int
+		expectedVal  int
+		shouldSetEnv bool
+	}{
+		{
+			name:         "Default value when env is empty",
+			envKey:       "TEST_WORKERS_EMPTY",
+			envVal:       "",
+			defaultVal:   50,
+			expectedVal:  50,
+			shouldSetEnv: false,
+		},
+		{
+			name:         "Valid integer from env",
+			envKey:       "TEST_WORKERS_VALID",
+			envVal:       "100",
+			defaultVal:   50,
+			expectedVal:  100,
+			shouldSetEnv: true,
+		},
+		{
+			name:         "Fallback to default on invalid string",
+			envKey:       "TEST_WORKERS_INVALID",
+			envVal:       "invalid_int",
+			defaultVal:   50,
+			expectedVal:  50,
+			shouldSetEnv: true,
+		},
 	}
 
-	// Test valid integer input
-	os.Setenv(envKey, "100")
-	if val := getEnvAsInt(envKey, defaultVal); val != 100 {
-		t.Errorf("Expected 100, got %d", val)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.shouldSetEnv {
+				t.Setenv(tt.envKey, tt.envVal)
+			} else {
+				os.Unsetenv(tt.envKey)
+			}
 
-	// Test invalid integer fallback
-	os.Setenv(envKey, "invalid_number")
-	if val := getEnvAsInt(envKey, defaultVal); val != defaultVal {
-		t.Errorf("Expected fallback to default value %d on invalid input, got %d", defaultVal, val)
+			got := getEnvAsInt(tt.envKey, tt.defaultVal)
+			if got != tt.expectedVal {
+				t.Errorf("getEnvAsInt(%s, %d) = %d; want %d", tt.envKey, tt.defaultVal, got, tt.expectedVal)
+			}
+		})
 	}
-
-	os.Unsetenv(envKey)
 }
 
-func TestProbeTarget_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
+func TestInitKubeClient_KubeconfigFallback(t *testing.T) {
+	// Point KUBECONFIG to a non-existent file to ensure clientcmd handles the path resolution
+	tempDir := t.TempDir()
+	fakeKubeconfig := filepath.Join(tempDir, "config")
+	t.Setenv("KUBECONFIG", fakeKubeconfig)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	httpProber := prober.NewHTTPProber(server.Client())
-	dispatcher := prober.NewDispatcher()
-	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
-
-	// Perform probe on successful endpoint
-	probeTarget(ctx, server.URL, dispatcher)
-}
-
-func TestProbeTarget_Non2xxStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	httpProber := prober.NewHTTPProber(server.Client())
-	dispatcher := prober.NewDispatcher()
-	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
-
-	// Perform probe on failing endpoint
-	probeTarget(ctx, server.URL, dispatcher)
-}
-
-func TestTargetScheduler(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	jobs := make(chan Job, 10)
-	interval := 50 * time.Millisecond
-	target := "http://test-target.svc.cluster.local"
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go targetScheduler(ctx, target, jobs, interval, &wg)
-
-	// Verify immediate first execution
-	select {
-	case job := <-jobs:
-		if job.Target != target {
-			t.Errorf("Expected target %s, got %s", target, job.Target)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("Timeout waiting for initial scheduled job")
+	// Create a dummy minimal kubeconfig file
+	dummyConfig := `
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: http://127.0.0.1:8080
+  name: dummy
+contexts:
+- context:
+    cluster: dummy
+    user: dummy
+  name: dummy
+current-context: dummy
+users:
+- name: dummy
+`
+	if err := os.WriteFile(fakeKubeconfig, []byte(dummyConfig), 0600); err != nil {
+		t.Fatalf("failed to write dummy kubeconfig: %v", err)
 	}
 
-	// Verify subsequent tick execution
-	select {
-	case job := <-jobs:
-		if job.Target != target {
-			t.Errorf("Expected target %s, got %s", target, job.Target)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("Timeout waiting for second scheduled job tick")
+	clientset := initKubeClient()
+	if clientset == nil {
+		t.Fatal("expected non-nil kubernetes Clientset")
 	}
-
-	cancel()
-	wg.Wait()
 }

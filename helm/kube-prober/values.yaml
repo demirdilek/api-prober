@@ -3,9 +3,9 @@ replicaCount: 1
 
 # Image configuration for the prober
 image:
-  repository: ghcr.io/demirdilek/api-prober
+  repository: ghcr.io/demirdilek/kube-prober
   pullPolicy: IfNotPresent
-  tag: ""
+  tag: "dev"
 
 # Service configuration for the prober
 service:
@@ -24,3 +24,4 @@ resources:
 dashboards:
   enabled: true
   label: grafana_dashboard
+  labelValue: "1"

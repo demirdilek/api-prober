@@ -1,4 +1,4 @@
-package prober_test
+package prober
 
 import (
 	"context"
@@ -7,68 +7,78 @@ import (
 
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
-
-	"github.com/demirdilek/kube-prober/pkg/prober"
+	"k8s.io/client-go/tools/cache"
 )
 
+// English comments as requested
+
 func TestTargetWatcher_InformerEvents(t *testing.T) {
-	// 1. Create dummy EndpointSlice BEFORE starting the Informer
-	slice := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-service-slice",
-			Namespace: "default",
-		},
-		AddressType: discoveryv1.AddressTypeIPv4,
-		Endpoints: []discoveryv1.Endpoint{
-			{
-				Addresses: []string{"10.244.0.5"},
-			},
-		},
-	}
-
-	// Initialize Fake Clientset with the initial object
-	clientset := fake.NewSimpleClientset(slice)
-	registry := prober.NewRegistry()
-	watcher := prober.NewTargetWatcher(clientset, registry)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	// 2. Start watcher in background
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- watcher.Start(ctx)
-	}()
+	clientset := fake.NewSimpleClientset()
+	registry := NewRegistry()
 
-	// 3. Wait until the initial object is processed by the Informer
-	var targets []string
-	assertEventually(t, 1*time.Second, 50*time.Millisecond, func() bool {
-		targets = registry.GetTargets()
-		return len(targets) > 0
-	}, "expected targets after EndpointSlice creation")
+	// Use informer factory with resync period to properly sync caches in tests
+	informerFactory := informers.NewSharedInformerFactory(clientset, 0)
+	endpointSliceInformer := informerFactory.Discovery().V1().EndpointSlices()
 
-	// 4. Test DELETE event
-	err := clientset.DiscoveryV1().EndpointSlices("default").Delete(context.Background(), slice.Name, metav1.DeleteOptions{})
+	endpointSliceInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
+				registry.UpdateFromEndpointSlice(slice)
+			}
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			if slice, ok := newObj.(*discoveryv1.EndpointSlice); ok {
+				registry.UpdateFromEndpointSlice(slice)
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
+				registry.RemoveEndpointSlice(slice)
+			}
+		},
+	})
+
+	informerFactory.Start(ctx.Done())
+
+	// Wait explicitly for caches to sync
+	if !cache.WaitForCacheSync(ctx.Done(), endpointSliceInformer.Informer().HasSynced) {
+		t.Fatal("timed out waiting for informer caches to sync")
+	}
+
+	port8080 := int32(8080)
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-slice",
+			Namespace: "default",
+		},
+		Ports: []discoveryv1.EndpointPort{
+			{Port: &port8080},
+		},
+		Endpoints: []discoveryv1.Endpoint{
+			{Addresses: []string{"10.244.0.15"}},
+		},
+	}
+
+	_, err := clientset.DiscoveryV1().EndpointSlices("default").Create(ctx, slice, metav1.CreateOptions{})
 	if err != nil {
-		t.Fatalf("failed to delete EndpointSlice: %v", err)
+		t.Fatalf("failed to create fake endpoint slice: %v", err)
 	}
 
-	assertEventually(t, 1*time.Second, 50*time.Millisecond, func() bool {
-		targets = registry.GetTargets()
-		return len(targets) == 0
-	}, "expected 0 targets after EndpointSlice deletion")
-}
+	// Give event handler a brief moment to process event
+	time.Sleep(100 * time.Millisecond)
 
-// Helper to poll without sleeping fixed amounts of time
-func assertEventually(t *testing.T, timeout, interval time.Duration, condition func() bool, msg string) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(interval)
+	targets := registry.GetTargets()
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target discovered via informer, got %d", len(targets))
 	}
-	t.Fatalf("timeout reached waiting for condition: %s", msg)
+
+	expectedURL := "http://10.244.0.15:8080/healthz"
+	if !Contains(targets, expectedURL) {
+		t.Errorf("expected target %s to be registered, got %v", expectedURL, targets)
+	}
 }

@@ -21,7 +21,6 @@ func NewRegistry() *Registry {
 func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	// Default HTTP port if no ports are explicitly listed in the slice
 	portVal := int32(80)
 	if len(slice.Ports) > 0 && slice.Ports[0].Port != nil {
@@ -40,7 +39,6 @@ func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice) {
 func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	portVal := int32(80)
 	if len(slice.Ports) > 0 && slice.Ports[0].Port != nil {
 		portVal = *slice.Ports[0].Port

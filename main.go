@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,181 +14,38 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/demirdilek/kube-prober/pkg/prober"
-)
-
-var (
-	// Latency measures probing duration in seconds per target.
-	latencyHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name: "api_prober_latency_seconds",
-			Help: "The time taken to probe the target in seconds (Latency).",
-		},
-		[]string{"target"},
-	)
-
-	// Traffic tracks the total number of probe requests sent per target.
-	trafficCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "api_prober_traffic_total",
-			Help: "Total number of probes sent to the target (Traffic).",
-		},
-		[]string{"target"},
-	)
-
-	// Errors tracks failed probes categorized by target and HTTP status code.
-	errorCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "api_prober_errors_total",
-			Help: "Total number of failed probes (Errors).",
-		},
-		[]string{"target", "status_code"},
-	)
-
-	// Saturation gauges current capacity by counting active concurrent worker goroutines.
-	saturationGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "api_prober_saturation_active_workers",
-			Help: "Number of active concurrent probing workers (Saturation).",
-		},
-		[]string{"target"},
-	)
+	"github.com/demirdilek/kube-prober/pkg/server"
 )
 
 func init() {
-	// Register the 4 Golden Signals metrics with the default Prometheus registry.
-	prometheus.MustRegister(latencyHistogram)
-	prometheus.MustRegister(trafficCounter)
-	prometheus.MustRegister(errorCounter)
-	prometheus.MustRegister(saturationGauge)
-}
-
-type Job struct {
-	// Target is the URL to be probed.
-	Target string
-}
-
-// probeTarget executes a probe against a target via the dispatcher and records 4 Golden Signals metrics.
-func probeTarget(ctx context.Context, target string, dispatcher *prober.Dispatcher) {
-	// Saturation: Track currently active, in-flight probe requests
-	saturationGauge.WithLabelValues(target).Inc()
-	defer saturationGauge.WithLabelValues(target).Dec()
-
-	// Traffic: Track the total rate of incoming probe executions
-	trafficCounter.WithLabelValues(target).Inc()
-
-	startTime := time.Now()
-
-	// EXECUTION VIA DISPATCHER (Function Pointer Routing)
-	errCat := dispatcher.Execute(ctx, target)
-	duration := time.Since(startTime).Seconds()
-
-	// Latency: Record time taken for round trips
-	latencyHistogram.WithLabelValues(target).Observe(duration)
-
-	// Errors: Track non-empty error categories as request failures
-	if errCat != "" {
-		errorCounter.WithLabelValues(target, string(errCat)).Inc()
-		slog.Warn("Target probing failed",
-			"target", target,
-			"error_category", errCat,
-			"hint", errCat.Hint(), // Actionable SRE hint
-		)
-	} else {
-		slog.Debug("Target probed successfully", "target", target, "duration_seconds", duration)
-	}
-}
-
-// workerPool continuously processes incoming jobs until the context is canceled or the channel is closed.
-func workerPool(ctx context.Context, jobs <-chan Job, dispatcher *prober.Dispatcher, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case job, ok := <-jobs:
-			if !ok {
-				return
-			}
-			probeTarget(ctx, job.Target, dispatcher)
-		}
-	}
-}
-
-// targetScheduler pushes a target job into the jobs channel immediately,
-// and then periodically at the specified interval until the context is canceled.
-func targetScheduler(ctx context.Context, target string, jobs chan<- Job, interval time.Duration, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	// Send the first job immediately upon startup
-	select {
-	case jobs <- Job{Target: target}:
-	case <-ctx.Done():
-		return
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			select {
-			case jobs <- Job{Target: target}:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
-}
-
-func getEnvAsInt(name string, defaultVal int) int {
-	valStr := os.Getenv(name)
-	if valStr == "" {
-		return defaultVal
-	}
-	val, err := strconv.Atoi(valStr)
-	if err != nil {
-		return defaultVal
-	}
-	return val
+	prober.RegisterMetrics(prometheus.DefaultRegisterer)
 }
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	numWorkers := getEnvAsInt("WORKERS", 50)
+	prober.MaxWorkersGauge.Set(float64(numWorkers))
 	jobQueueSize := getEnvAsInt("QUEUE_SIZE", 10000)
-	maxIdleConns := getEnvAsInt("MAX_IDLE_CONNS", 1000)
-	maxIdleConnsPerHost := getEnvAsInt("MAX_IDLE_CONNS_PER_HOST", 100)
-	probeIntervalSeconds := getEnvAsInt("PROBE_INTERVAL_SECONDS", 2)
-	httpTimeoutSeconds := getEnvAsInt("HTTP_TIMEOUT_SECONDS", 5)
+	probeInterval := time.Duration(getEnvAsInt("PROBE_INTERVAL_SECONDS", 2)) * time.Second
+	httpTimeout := time.Duration(getEnvAsInt("HTTP_TIMEOUT_SECONDS", 5)) * time.Second
 
-	probeInterval := time.Duration(probeIntervalSeconds) * time.Second
-
-	// 1. Configure custom HTTP client
 	httpClient := &http.Client{
-		Timeout: time.Duration(httpTimeoutSeconds) * time.Second,
+		Timeout: httpTimeout,
 		Transport: &http.Transport{
-			MaxIdleConns:        maxIdleConns,
-			MaxIdleConnsPerHost: maxIdleConnsPerHost,
+			MaxIdleConns:        getEnvAsInt("MAX_IDLE_CONNS", 1000),
+			MaxIdleConnsPerHost: getEnvAsInt("MAX_IDLE_CONNS_PER_HOST", 100),
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}
 
-	// 2. Initialize HTTP Prober and Dispatcher
 	httpProber := prober.NewHTTPProber(httpClient)
 	dispatcher := prober.NewDispatcher()
-
-	// 3. Register HTTP & HTTPS schemes using Function Pointers
 	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
 	dispatcher.Register("https", httpProber.ProbeHTTPTarget)
 
@@ -197,15 +53,72 @@ func main() {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	jobs := make(chan Job, jobQueueSize)
+	jobs := make(chan prober.Job, jobQueueSize)
 
-	// 4. Spawn background worker goroutines passing the dispatcher
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go workerPool(ctx, jobs, dispatcher, &wg)
+		go prober.WorkerPool(ctx, jobs, dispatcher, &wg)
 	}
 
-	// 5. Build Kubernetes client configuration
+	clientset := initKubeClient()
+	registry := prober.NewRegistry()
+	watcher := prober.NewTargetWatcher(clientset, registry)
+
+	go func() {
+		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("Informer watcher stopped", "error", err)
+		}
+	}()
+
+	activeSchedulers := make(map[string]context.CancelFunc)
+	var schedMu sync.Mutex
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				discoveredTargets := registry.GetTargets()
+				schedMu.Lock()
+				for target, cancelFunc := range activeSchedulers {
+					if !prober.Contains(discoveredTargets, target) {
+						slog.Info("Target removed", "target", target)
+						cancelFunc()
+						delete(activeSchedulers, target)
+					}
+				}
+				for _, target := range discoveredTargets {
+					if _, exists := activeSchedulers[target]; !exists {
+						slog.Info("New target discovered", "target", target)
+						schedCtx, schedCancel := context.WithCancel(ctx)
+						activeSchedulers[target] = schedCancel
+						wg.Add(1)
+						go prober.TargetScheduler(schedCtx, target, jobs, probeInterval, &wg)
+					}
+				}
+				schedMu.Unlock()
+			}
+		}
+	}()
+
+	srv := server.New(":8080")
+	go srv.Start()
+
+	<-ctx.Done()
+	slog.Info("Shutting down cleanly...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	_ = srv.Shutdown(shutdownCtx)
+	wg.Wait()
+	slog.Info("Goodbye.")
+}
+
+func initKubeClient() *kubernetes.Clientset {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		kubeconfig := os.Getenv("KUBECONFIG")
@@ -218,109 +131,22 @@ func main() {
 			os.Exit(1)
 		}
 	}
-
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		slog.Error("Failed to create k8s clientset", "error", err)
 		os.Exit(1)
 	}
-
-	// 6. Initialize Target Registry and TargetWatcher Informer
-	registry := prober.NewRegistry()
-	watcher := prober.NewTargetWatcher(clientset, registry)
-
-	// Start Kubernetes Informer in background
-	go func() {
-		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("Informer watcher stopped with error", "error", err)
-		}
-	}()
-
-	// 7. Synchronize Informer events with Prober Schedulers
-	activeSchedulers := make(map[string]context.CancelFunc)
-	var schedMu sync.Mutex
-
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				discoveredTargets := registry.GetTargets()
-
-				schedMu.Lock()
-				// Remove targets that no longer exist
-				for target, cancelFunc := range activeSchedulers {
-					if !contains(discoveredTargets, target) {
-						slog.Info("Target removed, stopping scheduler", "target", target)
-						cancelFunc()
-						delete(activeSchedulers, target)
-					}
-				}
-
-				// Add newly discovered targets
-				for _, target := range discoveredTargets {
-					if _, exists := activeSchedulers[target]; !exists {
-						slog.Info("New target discovered via Informer, allocating scheduler", "target", target)
-						schedCtx, schedCancel := context.WithCancel(ctx)
-						activeSchedulers[target] = schedCancel
-
-						wg.Add(1)
-						go targetScheduler(schedCtx, target, jobs, probeInterval, &wg)
-					}
-				}
-				schedMu.Unlock()
-			}
-		}
-	}()
-
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("READY"))
-	})
-
-	srv := &http.Server{Addr: ":8080", Handler: mux}
-
-	go func() {
-		slog.Info("Metric server starting on :8080")
-		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("HTTP server failed to run", "error", err)
-			os.Exit(1)
-		}
-	}()
-
-	<-ctx.Done()
-	slog.Info("Received shutdown signal, initiating graceful termination...")
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-
-	_ = srv.Shutdown(shutdownCtx)
-	wg.Wait()
-	slog.Info("kube-prober stack components stopped cleanly. Goodbye.")
+	return clientset
 }
 
-func contains(slice []string, key string) bool {
-	for _, item := range slice {
-		if item == key {
-			return true
-		}
+func getEnvAsInt(name string, defaultVal int) int {
+	valStr := os.Getenv(name)
+	if valStr == "" {
+		return defaultVal;
 	}
-	return false
+	val, err := strconv.Atoi(valStr)
+	if err != nil {
+		return defaultVal;
+	}
+	return val
 }
