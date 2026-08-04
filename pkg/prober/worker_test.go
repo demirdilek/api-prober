@@ -5,16 +5,17 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"slices"
 )
 
 func TestContains(t *testing.T) {
 	slice := []string{"http://service-a", "http://service-b"}
 
-	if !Contains(slice, "http://service-a") {
+	if !slices.Contains(slice, "http://service-a") {
 		t.Errorf("expected slice to contain http://service-a")
 	}
 
-	if Contains(slice, "http://service-c") {
+	if slices.Contains(slice, "http://service-c") {
 		t.Errorf("did not expect slice to contain http://service-c")
 	}
 }

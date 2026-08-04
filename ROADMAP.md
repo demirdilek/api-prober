@@ -17,11 +17,11 @@ This document outlines the planned improvements, architectural refinements, and 
 
 ## Phase 2: Medium Priority (Features & Reliability)
 
-- [ ] **Dynamic Path Resolution via Informer (`pkg/prober/registry.go`)**
+- [X] **Dynamic Path Resolution via Informer (`pkg/prober/registry.go`)**
   - Parse custom Service annotations (`probe/path`) dynamically via the Informer instead of hardcoding `/healthz` in the target URL builder.
 - [ ] **High Availability (HA) Setup**
   - Add `PodDisruptionBudget` (PDB) and `HorizontalPodAutoscaler` (HPA) manifests to the Helm chart.
-- [ ] **Metrics Clean-Up on Target Deletion**
+- [X] **Metrics Clean-Up on Target Deletion**
   - Unregister or clean up Prometheus metrics (Gauge/Counter labels) upon target deletion to avoid stale metrics and memory leaks.
 
 ---

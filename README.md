@@ -24,7 +24,8 @@
   - Custom paths can be annotated via `probe/path: "/healthz"`.
 - **Dynamic K8s Targets:** Monitored endpoints are dynamically discovered via Kubernetes API labels (`probe=true`) and custom path annotations (`probe/path="/healthz"`).
 - **6-Tier SRE Error Classification:** Categorizes failures into discrete buckets: `dns_error`, `connection_refused`, `tls_error`, `timeout`, `http_error` (4xx/5xx), and `unknown_error`.
-- **Actionable Diagnostic Hints:** Enriches structured `slog` JSON outputs with direct troubleshooting hints (`hint`) to lower Mean Time To Recovery (MTTR).
+- **Actionable SRE Diagnostic Hints:** Error metrics and alerts automatically carry context-aware recovery steps (`hint`) for all 6 failure categories (e.g., DNS, TLS, Timeout, HTTP 5xx), significantly lowering Mean Time To Recovery (MTTR) for on-call engineers.
+- **Dynamic Alertmanager Routing:** Clean, non-empty alert notifications dynamically formatted for both Slack ChatOps and high-priority Pushover mobile push notifications.
 - **GitOps Continuous Delivery:** Fully automated deployment, sync, and self-healing managed declaratively via Argo CD.
 - **Declarative Telemetry Stack:** Pre-configured Prometheus monitoring, Grafana sidecars, and Alertmanager routing via `prom-stack-values.yaml`.
 - **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down without dropping in-flight probes.

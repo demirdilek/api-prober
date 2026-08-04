@@ -35,3 +35,35 @@ func TestRegisterMetrics_Success(t *testing.T) {
 		t.Errorf("expected %d hint metric entries, got %d", expectedCategoriesCount, len(hintFamily.GetMetric()))
 	}
 }
+
+func TestDeleteTargetMetrics(t *testing.T) {
+	target := "http://10.244.0.50:8080/healthz"
+
+	// 1. Populate metrics with label values
+	TrafficCounter.WithLabelValues(target).Inc()
+	SaturationGauge.WithLabelValues(target).Set(1)
+	LatencyHistogram.WithLabelValues(target).Observe(0.05)
+	ErrorCounter.WithLabelValues(target, string(CategoryHTTP)).Inc()
+
+	// 2. Delete target metrics
+	DeleteTargetMetrics(target)
+
+	// 3. Verify metrics no longer contain the target label series
+	reg := prometheus.NewRegistry()
+	RegisterMetrics(reg)
+
+	metricFamilies, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+
+	for _, mf := range metricFamilies {
+		for _, m := range mf.GetMetric() {
+			for _, label := range m.GetLabel() {
+				if label.GetName() == "target" && label.GetValue() == target {
+					t.Errorf("expected metric %s label series for target %s to be deleted, but it still exists", mf.GetName(), target)
+				}
+			}
+		}
+	}
+}

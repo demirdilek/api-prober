@@ -78,12 +78,3 @@ func TargetScheduler(ctx context.Context, target string, jobs chan<- Job, interv
 		}
 	}
 }
-
-func Contains(slice []string, key string) bool {
-	for _, item := range slice {
-		if item == key {
-			return true
-		}
-	}
-	return false
-}

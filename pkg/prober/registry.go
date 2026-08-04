@@ -2,26 +2,42 @@ package prober
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
 )
 
+// TargetEvent represents a change in the discovered targets.
+type TargetEvent struct {
+	Target  string
+	IsAdded bool
+}
+
 type Registry struct {
 	mu      sync.RWMutex
 	targets map[string]string
+	Events  chan TargetEvent
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		targets: make(map[string]string),
+		Events:  make(chan TargetEvent, 1000),
 	}
 }
 
-func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice) {
+func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, path string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Default HTTP port if no ports are explicitly listed in the slice
+
+	if path == "" {
+		path = "/healthz"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
 	portVal := int32(80)
 	if len(slice.Ports) > 0 && slice.Ports[0].Port != nil {
 		portVal = *slice.Ports[0].Port
@@ -29,16 +45,27 @@ func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice) {
 
 	for _, ep := range slice.Endpoints {
 		for _, addr := range ep.Addresses {
-			// Construct full target URL from endpoint IP and port
-			targetURL := fmt.Sprintf("http://%s:%d/healthz", addr, portVal)
-			r.targets[targetURL] = slice.Namespace
+			targetURL := fmt.Sprintf("http://%s:%d%s", addr, portVal, path)
+
+			if _, exists := r.targets[targetURL]; !exists {
+				r.targets[targetURL] = slice.Namespace
+				r.Events <- TargetEvent{Target: targetURL, IsAdded: true}
+			}
 		}
 	}
 }
 
-func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice) {
+func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, path string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if path == "" {
+		path = "/healthz"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
 	portVal := int32(80)
 	if len(slice.Ports) > 0 && slice.Ports[0].Port != nil {
 		portVal = *slice.Ports[0].Port
@@ -46,8 +73,12 @@ func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice) {
 
 	for _, ep := range slice.Endpoints {
 		for _, addr := range ep.Addresses {
-			targetURL := fmt.Sprintf("http://%s:%d/healthz", addr, portVal)
-			delete(r.targets, targetURL)
+			targetURL := fmt.Sprintf("http://%s:%d%s", addr, portVal, path)
+
+			if _, exists := r.targets[targetURL]; exists {
+				delete(r.targets, targetURL)
+				r.Events <- TargetEvent{Target: targetURL, IsAdded: false}
+			}
 		}
 	}
 }

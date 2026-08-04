@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"time"
+	"io"
 )
 
 // ErrorCategory represents the 6 SRE error types
@@ -81,7 +82,6 @@ func MapToCategory(err error, statusCode int) ErrorCategory {
 	return CategoryUnknown
 }
 
-// HTTPProber executes HTTP-level probes
 type HTTPProber struct {
 	client *http.Client
 }
@@ -105,7 +105,9 @@ func (p *HTTPProber) ProbeHTTPTarget(ctx context.Context, target string) ErrorCa
 	var statusCode int
 	if resp != nil {
 		statusCode = resp.StatusCode
-		defer resp.Body.Close()
+		// Copy remaining body to io.Discard and close to enable TCP connection reuse
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 	}
 
 	return MapToCategory(err, statusCode)

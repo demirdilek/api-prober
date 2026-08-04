@@ -16,6 +16,8 @@ spec:
             severity: warning
           annotations:
             summary: '{{`High p99 latency on target {{ $labels.target }}`}}'
+            hint: "Check CPU/Memory utilization, database connections, or network policies on upstream target."
+
         # 2. Traffic: Traffic Collapse / No Probes Executing
         - alert: TrafficCollapse
           expr: sum(rate(kube_prober_traffic_total[2m])) by (target) == 0
@@ -24,6 +26,8 @@ spec:
             severity: critical
           annotations:
             summary: '{{`Traffic collapse on target {{ $labels.target }}`}}'
+            hint: "Check if prober workers are saturated or if the target EndpointSlice was unexpectedly deleted."
+
         # 3. Errors: High failure rate
         - alert: HighErrorRate
           expr: sum(increase(kube_prober_errors_total[2m])) by (target) > 0
@@ -32,7 +36,9 @@ spec:
             severity: critical
           annotations:
             summary: '{{`High error rate detected on target {{ $labels.target }}`}}'
-        # 4. Saturation: Worker Capacity Reached (Dynamic threshold at >= 90%)
+            hint: "Target application is failing probes (4xx/5xx/timeout). Inspect pod logs via 'kubectl logs' or check service endpoints."
+
+        # 4. Saturation: Worker Capacity Reached
         - alert: MaxWorkersReached
           expr: (sum(kube_prober_saturation_active_workers) / max(kube_prober_saturation_max_workers)) >= 0.9
           for: 1m
@@ -40,3 +46,4 @@ spec:
             severity: warning
           annotations:
             summary: "Prober worker capacity saturated (>= 90% of max workers utilized)"
+            hint: "Increase WORKERS environment variable or adjust PROBE_INTERVAL_SECONDS to reduce worker queue pressure."

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"slices"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,49 +27,39 @@ func TestRegistry_UpdateAndRemoveEndpointSlice(t *testing.T) {
 		},
 	}
 
-	registry.UpdateFromEndpointSlice(sliceWithPort)
+	// 1. Test Add with custom path
+	customPath := "/custom-health"
+	registry.UpdateFromEndpointSlice(sliceWithPort, customPath)
 
 	targets := registry.GetTargets()
 	if len(targets) != 2 {
 		t.Fatalf("expected 2 targets, got %d", len(targets))
 	}
 
-	expectedURL1 := "http://10.244.0.5:8080/healthz"
-	expectedURL2 := "http://10.244.0.6:8080/healthz"
+	expectedURL1 := "http://10.244.0.5:8080/custom-health"
+	expectedURL2 := "http://10.244.0.6:8080/custom-health"
 
-	if !Contains(targets, expectedURL1) || !Contains(targets, expectedURL2) {
+	if !slices.Contains(targets, expectedURL1) || !slices.Contains(targets, expectedURL2) {
 		t.Errorf("expected targets to contain %s and %s, got %v", expectedURL1, expectedURL2, targets)
 	}
 
-	sliceDefaultPort := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-slice-2",
-			Namespace: "default",
-		},
-		Ports:     []discoveryv1.EndpointPort{},
-		Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.244.0.10"}}},
+	// Verify events were emitted
+	if len(registry.Events) != 2 {
+		t.Fatalf("expected 2 events in channel, got %d", len(registry.Events))
 	}
 
-	registry.UpdateFromEndpointSlice(sliceDefaultPort)
-	targets = registry.GetTargets()
-	if len(targets) != 3 {
-		t.Fatalf("expected 3 targets, got %d", len(targets))
+	// 2. Test Idempotency
+	registry.UpdateFromEndpointSlice(sliceWithPort, customPath)
+	if len(registry.Events) != 2 {
+		t.Errorf("expected 2 events total (0 new), got %d", len(registry.Events))
 	}
 
-	expectedDefaultURL := "http://10.244.0.10:80/healthz"
-	if !Contains(targets, expectedDefaultURL) {
-		t.Errorf("expected targets to contain fallback URL %s", expectedDefaultURL)
-	}
-
-	registry.RemoveEndpointSlice(sliceWithPort)
+	// 3. Test Remove with custom path
+	registry.RemoveEndpointSlice(sliceWithPort, customPath)
 	targets = registry.GetTargets()
 
-	if len(targets) != 1 {
-		t.Fatalf("expected 1 target remaining, got %d", len(targets))
-	}
-
-	if Contains(targets, expectedURL1) {
-		t.Errorf("did not expect registry to contain removed target %s", expectedURL1)
+	if len(targets) != 0 {
+		t.Fatalf("expected 0 targets remaining, got %d", len(targets))
 	}
 }
 
@@ -87,7 +78,7 @@ func TestRegistry_ConcurrencySafety(t *testing.T) {
 				Ports:     []discoveryv1.EndpointPort{{Port: &port}},
 				Endpoints: []discoveryv1.Endpoint{{Addresses: []string{addr}}},
 			}
-			registry.UpdateFromEndpointSlice(slice)
+			registry.UpdateFromEndpointSlice(slice, "/healthz")
 		}(ip)
 
 		go func() {

@@ -84,3 +84,23 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		CategoryHintInfo.WithLabelValues(string(cat), cat.Hint()).Set(1)
 	}
 }
+
+// DeleteTargetMetrics removes Prometheus metric entries for a deleted target to prevent memory leaks.
+func DeleteTargetMetrics(target string) {
+	LatencyHistogram.DeleteLabelValues(target)
+	TrafficCounter.DeleteLabelValues(target)
+	SaturationGauge.DeleteLabelValues(target)
+
+	// Clean up all error categories for this target
+	categories := []ErrorCategory{
+		CategoryDNS,
+		CategoryConnect,
+		CategoryTLS,
+		CategoryTimeout,
+		CategoryHTTP,
+		CategoryUnknown,
+	}
+	for _, cat := range categories {
+		ErrorCounter.DeleteLabelValues(target, string(cat))
+	}
+}

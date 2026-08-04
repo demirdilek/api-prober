@@ -122,7 +122,7 @@ k3d-down: ## Delete local k3d cluster
 	k3d cluster delete mycluster || true
 
 clean: k3d-down ## Clean up cluster and temporary build files
-	rm -f project-dump.txt coverage.out coverage.html .argo.pid .prom.pid .grafana.pid
+	rm -f coverage.out coverage.html .argo.pid .prom.pid .grafana.pid
 
 forward-all: ## Forward Argo CD, Prometheus & Grafana UIs for Mobile/Tailscale
 	@echo "========================================================"

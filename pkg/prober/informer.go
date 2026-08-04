@@ -6,6 +6,7 @@ import (
 	"time"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -23,39 +24,54 @@ func NewTargetWatcher(clientset kubernetes.Interface, reg *Registry) *TargetWatc
 	}
 }
 
+func (w *TargetWatcher) getProbePath(ctx context.Context, slice *discoveryv1.EndpointSlice) string {
+	svcName := slice.Labels["kubernetes.io/service-name"]
+	if svcName == "" {
+		return "/healthz"
+	}
+
+	svc, err := w.clientset.CoreV1().Services(slice.Namespace).Get(ctx, svcName, metav1.GetOptions{})
+	if err != nil || svc.Annotations == nil {
+		return "/healthz"
+	}
+
+	if path, exists := svc.Annotations["probe/path"]; exists && path != "" {
+		return path
+	}
+
+	return "/healthz"
+}
+
 func (w *TargetWatcher) Start(ctx context.Context) error {
 	factory := informers.NewSharedInformerFactoryWithOptions(
 		w.clientset,
 		10*time.Minute,
 	)
 
-	// Modern EndpointSlice Informer (Kubernetes 1.21+ / replacement for corev1.Endpoints)
 	endpointSliceInformer := factory.Discovery().V1().EndpointSlices().Informer()
 
-_, err := endpointSliceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, err := endpointSliceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
-				// Only process EndpointSlices marked for probing
 				if slice.Labels["probe"] == "true" {
-					w.registry.UpdateFromEndpointSlice(slice)
+					path := w.getProbePath(ctx, slice)
+					w.registry.UpdateFromEndpointSlice(slice, path)
 				}
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			if newSlice, ok := newObj.(*discoveryv1.EndpointSlice); ok {
-				// If the label is still present, update the registry
+				path := w.getProbePath(ctx, newSlice)
 				if newSlice.Labels["probe"] == "true" {
-					w.registry.UpdateFromEndpointSlice(newSlice)
+					w.registry.UpdateFromEndpointSlice(newSlice, path)
 				} else {
-					// If the label was removed from the target, remove it from the registry
-					w.registry.RemoveEndpointSlice(newSlice)
+					w.registry.RemoveEndpointSlice(newSlice, path)
 				}
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
 			slice, ok := obj.(*discoveryv1.EndpointSlice)
 			if !ok {
-				// Handle tombstone state if object was deleted while offline
 				tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 				if !ok {
 					return
@@ -65,9 +81,9 @@ _, err := endpointSliceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 					return
 				}
 			}
-			// Clean up target if it was being probed
 			if slice.Labels["probe"] == "true" {
-				w.registry.RemoveEndpointSlice(slice)
+				path := w.getProbePath(ctx, slice)
+				w.registry.RemoveEndpointSlice(slice, path)
 			}
 		},
 	})

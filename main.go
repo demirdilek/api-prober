@@ -73,32 +73,31 @@ func main() {
 	activeSchedulers := make(map[string]context.CancelFunc)
 	var schedMu sync.Mutex
 
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
+go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				discoveredTargets := registry.GetTargets()
+			case evt := <-registry.Events:
 				schedMu.Lock()
-				for target, cancelFunc := range activeSchedulers {
-					if !prober.Contains(discoveredTargets, target) {
-						slog.Info("Target removed", "target", target)
-						cancelFunc()
-						delete(activeSchedulers, target)
-					}
-				}
-				for _, target := range discoveredTargets {
-					if _, exists := activeSchedulers[target]; !exists {
-						slog.Info("New target discovered", "target", target)
+				
+				if evt.IsAdded {
+					if _, exists := activeSchedulers[evt.Target]; !exists {
+						slog.Info("New target discovered", "target", evt.Target)
 						schedCtx, schedCancel := context.WithCancel(ctx)
-						activeSchedulers[target] = schedCancel
+						activeSchedulers[evt.Target] = schedCancel
+						
 						wg.Add(1)
-						go prober.TargetScheduler(schedCtx, target, jobs, probeInterval, &wg)
+						go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &wg)
 					}
-				}
+					} else {
+							if cancelFunc, exists := activeSchedulers[evt.Target]; exists {
+							slog.Info("Target removed", "target", evt.Target)
+							cancelFunc()
+							delete(activeSchedulers, evt.Target)
+							prober.DeleteTargetMetrics(evt.Target) // <--- Clean up metrics here
+						}
+					}	
 				schedMu.Unlock()
 			}
 		}
