@@ -133,13 +133,13 @@ hard-reset: clean all ## Deep clean cluster and rebuild stack fresh
 
 test-targets-enable: ## Scale up test targets to simulate traffic and latency
 	@echo "Enabling test targets (httpbin-slow, httpbin)..."
-	kubectl scale deployment httpbin-slow --replicas=1 -n default
-	kubectl scale deployment httpbin --replicas=1 -n default
+	kubectl scale deployment httpbin-slow --replicas=1 -n default 2>/dev/null || true
+	kubectl scale deployment httpbin --replicas=1 -n default 2>/dev/null || true
 
 test-targets-disable: ## Scale down test targets to 0 replicas (clean baseline)
 	@echo "Disabling test targets to avoid resource usage..."
-	kubectl scale deployment httpbin-slow --replicas=0 -n default
-	kubectl scale deployment httpbin --replicas=0 -n default
+	kubectl scale deployment httpbin-slow --replicas=0 -n default 2>/dev/null || true
+	kubectl scale deployment httpbin --replicas=0 -n default 2>/dev/null || true
 
 trigger-slow-alert: test-targets-enable ## Scale up slow endpoint to trigger HighLatency alert
 	@echo "httpbin-slow enabled. HighLatency alert should fire within ~2 minutes."

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "==> [Traffic] Simulating traffic collapse by scaling httpbin to 0 replicas..."
+echo "==> [Traffic] Simulating traffic collapse by misrouting httpbin-success service port..."
 
-if kubectl get deployment httpbin >/dev/null 2>&1; then
-  kubectl scale deployment httpbin --replicas=0
-  echo "==> httpbin scaled to 0. Probes will fail/drop, triggering TrafficCollapse alert."
+if kubectl get svc httpbin-success -n default >/dev/null 2>&1; then
+  kubectl patch service httpbin-success -n default -p '{"spec":{"ports":[{"port":80,"targetPort":9999}]}}'
+  echo "==> httpbin-success patched to invalid port (9999). Traffic collapse simulated."
 else
-  echo "ERROR: Deployment httpbin not found. Ensure the base helm chart is installed."
+  echo "ERROR: Service httpbin-success not found in default namespace."
   exit 1
 fi

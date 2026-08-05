@@ -139,7 +139,7 @@ make stop-forward
 make test
 ```
 
-![Kubernetes Pods](assets/pods.png)
+![Kubernetes Pods](./assets/pods.png)
 
 ---
 
@@ -155,11 +155,11 @@ Once background port-forwarding is active (`make forward-all`), access the Contr
 
 | Argo CD Control Plane | Prometheus Target Telemetry |
 | :---: | :---: |
-| ![Argo](assets/argo.png) | ![Prometheus](assets/prometheus.png) |
+| ![Argo](./assets/argo.png) | ![Prometheus](./assets/prometheus.png) |
 
 | Grafana 4 Golden Signals Dashboard | Structured Slog Output |
 | :---: | :---: |
-| ![Grafana Dashboard](assets/grafana-dashboard.png) | ![Slog Output](assets/slog-output.png) |
+| ![Grafana Dashboard](./assets/grafana-dashboard.png) | ![Slog Output](./assets/slog-output.png) |
 
 ---
 
@@ -173,28 +173,55 @@ The setup allows you to simulate threshold violations for different Golden Signa
 
 #### 1. High Latency Alert
 
-The Helm chart automatically provisions a target called `httpbin-slow` which simulates delayed responses (`/delay/1`). Once Prometheus evaluates the high p99 latency threshold over the defined timeframe, Alertmanager triggers the `HighLatency` rule.
-
-#### 2. High Error Rate Alert (Dynamic Discovery & Error Target Simulation)
-
-You can trigger a real-time HTTP 500 error alert using the Makefile.
-Deploy an artificial error target with the required `probe: "true"` label:
+Simulate response delay (`/delay/2`) to breach p99 latency thresholds:
 
 ```bash
-# Deploy an artificial error target (HTTP 500)
-make test-alert
+make test-alert-latency
+```
 
-# Clean up the error target after testing
+#### 2. High Error Rate Alert
+
+Deploy an artificial target returning HTTP 500 Internal Server Errors:
+
+```bash
+make test-alert-error
+```
+
+#### 3. Traffic Collapse Alert
+
+Simulate a severe network/transport outage by misrouting a target service port to an invalid endpoint (Port 9999):
+
+```bash
+make test-alert-traffic
+```
+
+#### 4. Worker Saturation Alert
+
+Saturate prober queue capacity by temporarily reducing the worker pool down to 2 goroutines:
+
+```bash
+make test-alert-saturation
+```
+
+##### 🧹 Cleanup Alert Simulations
+
+To clean up all deployed artificial test targets, restore patched service ports, and reset the default WORKERS capacity, run:
+
+```bash
 make test-alert-clean
 ```
 
-The Go engine will dynamically discover the new endpoint instantly via its event-driven Kubernetes Informer stream and start probing it. Shortly after, the `HighErrorRate` rule fires in Prometheus and escalates to Alertmanager.
+Once triggered, the Go engine dynamically adapts probing via its event-driven Kubernetes Informer stream, exposing metrics for Prometheus to evaluate and escalate to Alertmanager.
+
+---
 
 ### Multi-Channel Alert Routing Matrix
 
-| Slack Audit Trail (`#alerts`) | Pushover Lockscreen Alert | Pushover Detailed View |
-| :---: | :---: | :---: |
-| ![Slack Alert](assets/slack.png) | ![Pushover Push](assets/pushover1.png) | ![Pushover Detail](assets/pushover2.png) |
+| Slack Audit Trail (`#alerts`) | Pushover Detailed View |
+| :---: | :---: |
+| ![Slack Alert](./assets/slack.png) | ![Pushover Push](./assets/pushover.jpg) |  
+
+---
 
 ### Roadmap & Production Readiness
 

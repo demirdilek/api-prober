@@ -1,0 +1,2992 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.github/
+  workflows/
+    build-and-push.yml
+    ci.yml
+assets/
+  argo.png
+  grafana-dashboard.png
+  pods.png
+  prometheus.png
+  pushover.jpg
+  slack.png
+  slog-output.png
+deploy/
+  argocd/
+    kube-prober-app.yaml
+helm/
+  kube-prober/
+    dashboards/
+      kube_prober_dashboard.json
+    templates/
+      dashboard-configmap.yaml
+      deployment.yaml
+      httpbin.yaml
+      prometheusrule.yaml
+      rbac.yaml
+      service.yaml
+      servicemonitor.yaml
+    Chart.yaml
+    values-prod.yaml
+    values.yaml
+pkg/
+  prober/
+    dispatcher_test.go
+    dispatcher.go
+    informer_test.go
+    informer.go
+    metrics_test.go
+    metrics.go
+    prober_test.go
+    prober.go
+    registry_test.go
+    registry.go
+    worker_test.go
+    worker.go
+  server/
+    server_test.go
+    server.go
+scripts/
+  alerts/
+    cleanup-all.sh
+    trigger-error.sh
+    trigger-latency.sh
+    trigger-saturation.sh
+    trigger-traffic.sh
+  deploy-prometheus.sh
+  forward-all.sh
+.dockerignore
+.env.example
+.gitignore
+Dockerfile
+go.mod
+LICENSE
+main_test.go
+main.go
+Makefile
+prom-stack-values.yaml
+README.md
+ROADMAP.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="deploy/argocd/kube-prober-app.yaml">
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prober
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/demirdilek/kube-prober.git'
+    targetRevision: HEAD
+    path: 'helm/kube-prober'
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+</file>
+
+<file path="helm/kube-prober/dashboards/kube_prober_dashboard.json">
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Latency (99th Percentile)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(kube_prober_latency_seconds_bucket[5m])) by (le, target))",
+          "legendFormat": "{{target}} (p99)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line" }, "unit": "s" }
+      }
+    },
+    {
+      "title": "Traffic (Probe Rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(kube_prober_traffic_total[5m])) by (target)",
+          "legendFormat": "{{target}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line" }, "unit": "reqps" }
+      }
+    },
+    {
+      "title": "Errors (Failed Probes)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(kube_prober_errors_total[5m])) by (target, status_code) or vector(0)",
+          "legendFormat": "{{target}} - Status {{status_code}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { 
+          "custom": { "drawStyle": "line" }, 
+          "unit": "none",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "title": "Saturation (Active Workers)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "(sum(kube_prober_saturation_active_workers) / max(kube_prober_saturation_max_workers)) * 100",
+          "legendFormat": "{{target}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line" }, "unit": "percent" }
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["sre", "network"],
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Kube Prober - 4 Golden Signals",
+  "version": 2,
+  "uid": "kube-prober-home"
+}
+</file>
+
+<file path="helm/kube-prober/templates/deployment.yaml">
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      serviceAccountName: "{{ .Release.Name }}-sa"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534 # nobody user
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+</file>
+
+<file path="helm/kube-prober/templates/rbac.yaml">
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-service-discovery
+rules:
+  # Permissions required for the EndpointSlice Informer
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  # Permissions required to read Service metadata/annotations
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-service-discovery-binding
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-sa
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Release.Name }}-service-discovery
+  apiGroup: rbac.authorization.k8s.io
+</file>
+
+<file path="helm/kube-prober/templates/service.yaml">
+# templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  # The ServiceMonitor uses this label to discover the Service
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    # Add this name mapping so the ServiceMonitor can bind to it
+    - name: metrics
+      port: {{ .Values.service.port }}
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: {{ .Release.Name }}
+</file>
+
+<file path="helm/kube-prober/templates/servicemonitor.yaml">
+# templates/servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  # Use .Release.Name instead of the missing helper template
+  name: {{ .Release.Name }}
+  labels:
+    # Strictly required for the Prometheus Operator to discover the target
+    release: prom-stack
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  endpoints:
+    - port: metrics
+      interval: 2s
+      path: /metrics
+</file>
+
+<file path="helm/kube-prober/Chart.yaml">
+apiVersion: v2
+name: kube-prober
+description: Helm chart for the Kube Prober
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+</file>
+
+<file path="helm/kube-prober/values-prod.yaml">
+# ==============================================================================
+# Production Overrides
+# ==============================================================================
+
+# Disable all mock/fault-injection targets
+httpbin:
+  enabled: false
+
+# Production-grade replica counts for kube-prober engine
+replicaCount: 2
+
+# Override settings for real targets (if applicable)
+# ...
+</file>
+
+<file path="pkg/server/server_test.go">
+package server
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"testing"
+	"time"
+)
+
+// English comments as requested
+
+func TestServer_EndpointsAndLifecycle(t *testing.T) {
+	// Use an arbitrary high port for local test server binding
+	addr := "127.0.0.1:18080"
+	srv := New(addr)
+
+	// Start server in background goroutine
+	go srv.Start()
+
+	// Wait briefly for server to bind and listen
+	time.Sleep(50 * time.Millisecond)
+
+	baseURL := "http://" + addr
+
+	tests := []struct {
+		name           string
+		path           string
+		expectedStatus int
+		expectedBody   string
+	}{
+		{
+			name:           "Healthz endpoint",
+			path:           "/healthz",
+			expectedStatus: http.StatusOK,
+			expectedBody:   "OK",
+		},
+		{
+			name:           "Readyz endpoint",
+			path:           "/readyz",
+			expectedStatus: http.StatusOK,
+			expectedBody:   "READY",
+		},
+		{
+			name:           "Metrics endpoint",
+			path:           "/metrics",
+			expectedStatus: http.StatusOK,
+			expectedBody:   "",
+		},
+		{
+			name:           "Pprof debug index",
+			path:           "/debug/pprof/",
+			expectedStatus: http.StatusOK,
+			expectedBody:   "",
+		},
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := client.Get(baseURL + tt.path)
+			if err != nil {
+				t.Fatalf("failed to perform GET request to %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tt.expectedStatus {
+				t.Errorf("expected status %d for %s, got %d", tt.expectedStatus, tt.path, resp.StatusCode)
+			}
+
+			if tt.expectedBody != "" {
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatalf("failed to read body: %v", err)
+				}
+				if string(body) != tt.expectedBody {
+					t.Errorf("expected body %q, got %q", tt.expectedBody, string(body))
+				}
+			}
+		})
+	}
+
+	// Test graceful shutdown
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		t.Errorf("expected clean server shutdown, got error: %v", err)
+	}
+}
+</file>
+
+<file path="pkg/server/server.go">
+package server
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/pprof"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+type Server struct {
+	srv *http.Server
+}
+
+func New(addr string) *Server {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("READY"))
+	})
+
+	return &Server{
+		srv: &http.Server{Addr: addr, Handler: mux},
+	}
+}
+
+func (s *Server) Start() {
+	slog.Info("Metric server starting", "addr", s.srv.Addr)
+	if err := s.srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		slog.Error("HTTP server failed to run", "error", err)
+	}
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.srv.Shutdown(ctx)
+}
+</file>
+
+<file path="scripts/alerts/cleanup-all.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "==> Cleaning up all simulated alert targets & restoring defaults..."
+
+# Delete artificial test deployments & services
+kubectl delete deployment httpbin-error httpbin-latency-test --ignore-not-found
+kubectl delete service httpbin-error httpbin-latency-test --ignore-not-found
+
+# Restore base httpbin replicas to 1
+if kubectl get deployment httpbin >/dev/null 2>&1; then
+  kubectl scale deployment httpbin --replicas=1
+fi
+
+# Restore default WORKERS capacity to 50
+if kubectl get deployment kube-prober >/dev/null 2>&1; then
+  kubectl set env deployment/kube-prober WORKERS=50
+fi
+
+echo "==> Cleanup complete! Cluster restored to default state."
+
+# Set the port to normal state(:8080). It is for the trigger-traffic.sh script
+kubectl patch service httpbin-success -n default --type=merge -p '{"spec":{"ports":[{"port":80,"targetPort":80}]}}' 2>/dev/null || true
+</file>
+
+<file path="scripts/alerts/trigger-error.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "==> [Errors] Deploying HTTP 500 error target..."
+
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpbin-error
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: httpbin-error
+  template:
+    metadata:
+      labels:
+        app: httpbin-error
+    spec:
+      containers:
+        - name: httpbin
+          image: mccutchen/go-httpbin:latest
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-error
+  namespace: default
+  labels:
+    probe: "true"
+  annotations:
+    probe/path: "/status/500"
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+      name: http
+  selector:
+    app: httpbin-error
+EOF
+
+echo "==> Target httpbin-error deployed. Alert HighErrorRate will trigger shortly."
+</file>
+
+<file path="scripts/alerts/trigger-latency.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "==> [Latency] Deploying high-latency target (/delay/2)..."
+
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpbin-latency-test
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: httpbin-latency-test
+  template:
+    metadata:
+      labels:
+        app: httpbin-latency-test
+    spec:
+      containers:
+        - name: httpbin
+          image: mccutchen/go-httpbin:latest
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-latency-test
+  namespace: default
+  labels:
+    probe: "true"
+  annotations:
+    probe/path: "/delay/2"
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+      name: http
+  selector:
+    app: httpbin-latency-test
+EOF
+
+echo "==> Target httpbin-latency-test deployed. Alert HighLatency will trigger shortly."
+</file>
+
+<file path="scripts/alerts/trigger-saturation.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "==> [Saturation] Temporarily setting WORKERS=2 to saturate worker pool..."
+
+if kubectl get deployment kube-prober >/dev/null 2>&1; then
+  kubectl set env deployment/kube-prober WORKERS=2
+  echo "==> WORKERS capacity reduced to 2. Alert MaxWorkersReached will trigger shortly."
+else
+  echo "ERROR: Deployment kube-prober not found."
+  exit 1
+fi
+</file>
+
+<file path="scripts/alerts/trigger-traffic.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "==> [Traffic] Simulating traffic collapse by misrouting httpbin-success service port..."
+
+if kubectl get svc httpbin-success -n default >/dev/null 2>&1; then
+  kubectl patch service httpbin-success -n default -p '{"spec":{"ports":[{"port":80,"targetPort":9999}]}}'
+  echo "==> httpbin-success patched to invalid port (9999). Traffic collapse simulated."
+else
+  echo "ERROR: Service httpbin-success not found in default namespace."
+  exit 1
+fi
+</file>
+
+<file path="scripts/deploy-prometheus.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Helm-Repository hinzufügen und aktualisieren
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+
+HELM_FLAGS=(
+  "--set" "alertmanager.config.receivers[1].slack_configs[0].api_url=${SLACK_WEBHOOK_URL:-}"
+  "--set" "alertmanager.config.receivers[2].pushover_configs[0].user_key=${PUSHOVER_USER_KEY:-}"
+  "--set" "alertmanager.config.receivers[2].pushover_configs[0].token=${PUSHOVER_API_TOKEN:-}"
+)
+
+if [ -f prom-stack-values.local.yaml ]; then
+  echo "==> Applying Prometheus stack with local overrides and .env secrets..."
+  helm upgrade --install prom-stack prometheus-community/kube-prometheus-stack \
+    -f prom-stack-values.yaml \
+    -f prom-stack-values.local.yaml \
+    "${HELM_FLAGS[@]}"
+else
+  echo "==> Applying base Prometheus stack configuration with .env secrets..."
+  helm upgrade --install prom-stack prometheus-community/kube-prometheus-stack \
+    -f prom-stack-values.yaml \
+    "${HELM_FLAGS[@]}"
+fi
+</file>
+
+<file path="scripts/forward-all.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "localhost")
+
+# Passwörter sicher auslesen (verhindert Abbruch durch pipefail)
+ARGO_PASS=$(kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d 2>/dev/null || true)
+if [ -z "$ARGO_PASS" ]; then
+  ARGO_PASS="Not found / Custom Password"
+fi
+
+GRAFANA_PASS=$(kubectl -n default get secret prom-stack-grafana -o jsonpath="{.data.admin-password}" 2>/dev/null | base64 -d 2>/dev/null || true)
+if [ -z "$GRAFANA_PASS" ]; then
+  GRAFANA_PASS="admin"
+fi
+
+echo "========================================================"
+echo " CONTROL PLANE WEB UIs (Tailscale / Mobile Access)"
+echo "========================================================"
+echo " ARGO CD:    https://${TAILSCALE_IP}:8080"
+echo "   User:     admin"
+echo "   Password: ${ARGO_PASS}"
+echo " "
+echo "--------------------------------------------------------"
+echo " PROMETHEUS: http://${TAILSCALE_IP}:9090"
+echo "--------------------------------------------------------"
+echo " GRAFANA:    http://${TAILSCALE_IP}:3000"
+echo "   User:     admin"
+echo "   Password: ${GRAFANA_PASS}"
+echo " "
+echo "========================================================"
+echo "==> Starting Port-Forwards in background..."
+
+kubectl port-forward --address 0.0.0.0 -n argocd svc/argocd-server 8080:443 >/dev/null 2>&1 & echo $! > .argo.pid
+kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-kube-prometheus-prometheus 9090:9090 >/dev/null 2>&1 & echo $! > .prom.pid
+kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-grafana 3000:80 >/dev/null 2>&1 & echo $! > .grafana.pid
+
+echo "==> Done! All 3 UIs are accessible via Tailscale."
+</file>
+
+<file path="LICENSE">
+MIT License
+
+Copyright (c) 2026 Hüseyin Demirdilek
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</file>
+
+<file path=".github/workflows/build-and-push.yml">
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**'
+      - '!**.md'
+      - '!docs/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+</file>
+
+<file path="helm/kube-prober/templates/dashboard-configmap.yaml">
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-prober-dashboard
+  namespace: default
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/name: kube-prober
+data:
+  kube_prober_dashboard.json: |-
+{{ .Files.Get "dashboards/kube_prober_dashboard.json" | indent 4 }}
+</file>
+
+<file path="helm/kube-prober/templates/httpbin.yaml">
+{{- if .Values.httpbin.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpbin
+  labels:
+    app: httpbin
+spec:
+  replicas: {{ .Values.httpbin.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      app: httpbin
+  template:
+    metadata:
+      labels:
+        app: httpbin
+    spec:
+      containers:
+        - name: httpbin
+          image: mccutchen/go-httpbin:v2.14.0
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: 50m
+              memory: 64Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+---
+# 1. Normaler Success Endpoint
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-success
+  labels:
+    app: httpbin
+    probe: "true"
+  annotations:
+    probe/path: "/status/200"
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: httpbin
+{{- end }}
+</file>
+
+<file path="helm/kube-prober/templates/prometheusrule.yaml">
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: "{{ .Release.Name }}-rules"
+  labels:
+    release: prom-stack
+spec:
+  groups:
+    - name: kube-prober-golden-signals
+      rules:
+        # 1. Latency: High p99 Latency
+        - alert: HighLatency
+          expr: histogram_quantile(0.99, sum(rate(kube_prober_latency_seconds_bucket[5m])) by (le, target)) > 1.5
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: '{{`High p99 latency on target {{ $labels.target }}`}}'
+            hint: "Check CPU/Memory utilization, database connections, or network policies on upstream target."
+
+        # 2. Traffic: Traffic Collapse / No Probes Executing
+        - alert: TrafficCollapse
+          expr: (sum(rate(kube_prober_errors_total[2m])) by (target) == sum(rate(kube_prober_traffic_total[2m])) by (target)) and (sum(rate(kube_prober_traffic_total[2m])) by (target) > 0)
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{`Traffic collapse / total outage on target {{ $labels.target }}`}}'
+            hint: "Check if prober workers are failing to reach the endpoint or if the target service port is misconfigured."
+
+        # 3. Errors: High failure rate
+        - alert: HighErrorRate
+          expr: sum(increase(kube_prober_errors_total[2m])) by (target) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{`High error rate detected on target {{ $labels.target }}`}}'
+            hint: "Target application is failing probes (4xx/5xx/timeout). Inspect pod logs via 'kubectl logs' or check service endpoints."
+
+        # 4. Saturation: Worker Capacity Reached
+        - alert: MaxWorkersReached
+          expr: (sum(kube_prober_saturation_active_workers) / max(kube_prober_saturation_max_workers)) >= 0.9
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Prober worker capacity saturated (>= 90% of max workers utilized)"
+            hint: "Increase WORKERS environment variable or adjust PROBE_INTERVAL_SECONDS to reduce worker queue pressure."
+</file>
+
+<file path="pkg/prober/dispatcher_test.go">
+package prober
+
+import (
+	"context"
+	"testing"
+)
+
+func TestDispatcher(t *testing.T) {
+	dispatcher := NewDispatcher()
+
+	// Mock probe function simulating a successful HTTP execution
+	mockHTTP := func(ctx context.Context, target string) ErrorCategory {
+		return "" // Success
+	}
+
+	// Mock probe function simulating a DNS failure
+	mockDNSFail := func(ctx context.Context, target string) ErrorCategory {
+		return CategoryDNS
+	}
+
+	// Register function pointers
+	dispatcher.Register("http", mockHTTP)
+	dispatcher.Register("dns", mockDNSFail)
+
+	tests := []struct {
+		name   string
+		target string
+		want   ErrorCategory
+	}{
+		{
+			name:   "Registered HTTP Scheme",
+			target: "http://example.com",
+			want:   "",
+		},
+		{
+			name:   "Registered DNS Scheme",
+			target: "dns://example.com",
+			want:   CategoryDNS,
+		},
+		{
+			name:   "Unregistered Scheme (gRPC)",
+			target: "grpc://example.com",
+			want:   CategoryUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dispatcher.Execute(context.Background(), tt.target)
+			if got != tt.want {
+				t.Errorf("dispatcher.Execute() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+</file>
+
+<file path="pkg/prober/dispatcher.go">
+package prober
+
+import (
+	"context"
+	"net/url"
+	"sync"
+)
+
+// ProbeFunc defines the function pointer signature for any protocol prober.
+type ProbeFunc func(ctx context.Context, target string) ErrorCategory
+
+// Dispatcher manages protocol handlers via function pointers
+type Dispatcher struct {
+	mu      sync.RWMutex
+	probers map[string]ProbeFunc
+}
+
+// NewDispatcher initializes an empty dispatcher map
+func NewDispatcher() *Dispatcher {
+	return &Dispatcher{
+		probers: make(map[string]ProbeFunc),
+	}
+}
+
+// Register assigns a ProbeFunc function pointer to a specific scheme (e.g., "http", "https")
+func (d *Dispatcher) Register(scheme string, fn ProbeFunc) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.probers[scheme] = fn
+}
+
+// Execute resolves the scheme from the target URL and runs the corresponding ProbeFunc
+func (d *Dispatcher) Execute(ctx context.Context, target string) ErrorCategory {
+	parsedURL, err := url.Parse(target)
+	if err != nil {
+		return CategoryUnknown
+	}
+
+	d.mu.RLock()
+	fn, exists := d.probers[parsedURL.Scheme]
+	d.mu.RUnlock()
+
+	if !exists {
+		return CategoryUnknown
+	}
+
+	// Direct execution via function pointer
+	return fn(ctx, target)
+}
+</file>
+
+<file path="pkg/prober/metrics_test.go">
+package prober
+
+import (
+	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	prometheus_dto "github.com/prometheus/client_model/go"
+)
+
+func TestRegisterMetrics_Success(t *testing.T) {
+	reg := prometheus.NewRegistry()
+
+	// Direct call without prober.
+	RegisterMetrics(reg)
+
+	metricFamilies, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+
+	var hintFamily *prometheus_dto.MetricFamily
+	for _, mf := range metricFamilies {
+		if mf.GetName() == "kube_prober_error_category_hint_info" {
+			hintFamily = mf
+			break
+		}
+	}
+
+	if hintFamily == nil {
+		t.Fatal("expected metric kube_prober_error_category_hint_info to be registered")
+	}
+
+	expectedCategoriesCount := 6
+	if len(hintFamily.GetMetric()) != expectedCategoriesCount {
+		t.Errorf("expected %d hint metric entries, got %d", expectedCategoriesCount, len(hintFamily.GetMetric()))
+	}
+}
+
+func TestDeleteTargetMetrics(t *testing.T) {
+	target := "http://10.244.0.50:8080/healthz"
+
+	// 1. Populate metrics with label values
+	TrafficCounter.WithLabelValues(target).Inc()
+	SaturationGauge.WithLabelValues(target).Set(1)
+	LatencyHistogram.WithLabelValues(target).Observe(0.05)
+	ErrorCounter.WithLabelValues(target, string(CategoryHTTP)).Inc()
+
+	// 2. Delete target metrics
+	DeleteTargetMetrics(target)
+
+	// 3. Verify metrics no longer contain the target label series
+	reg := prometheus.NewRegistry()
+	RegisterMetrics(reg)
+
+	metricFamilies, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+
+	for _, mf := range metricFamilies {
+		for _, m := range mf.GetMetric() {
+			for _, label := range m.GetLabel() {
+				if label.GetName() == "target" && label.GetValue() == target {
+					t.Errorf("expected metric %s label series for target %s to be deleted, but it still exists", mf.GetName(), target)
+				}
+			}
+		}
+	}
+}
+</file>
+
+<file path="pkg/prober/metrics.go">
+package prober
+
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+var (
+	// Latency measures probing duration in seconds per target.
+	LatencyHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "kube_prober_latency_seconds",
+			Help: "The time taken to probe the target in seconds (Latency).",
+		},
+		[]string{"target"},
+	)
+
+	// Traffic tracks the total number of probe requests sent per target.
+	TrafficCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kube_prober_traffic_total",
+			Help: "Total number of probes sent to the target (Traffic).",
+		},
+		[]string{"target"},
+	)
+
+	// Errors tracks failed probes categorized by target and error category.
+	ErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kube_prober_errors_total",
+			Help: "Total number of failed probes (Errors).",
+		},
+		[]string{"target", "category"},
+	)
+
+	// Saturation gauges current capacity by counting active concurrent worker goroutines.
+	SaturationGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kube_prober_saturation_active_workers",
+			Help: "Number of active concurrent probing workers (Saturation).",
+		},
+		[]string{"target"},
+	)
+
+	// Max workers capacity metric (Saturation capacity)
+	MaxWorkersGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "kube_prober_saturation_max_workers",
+			Help: "Maximum capacity of worker goroutines configured for the prober.",
+		},
+	)
+
+	// CategoryHintInfo exposes troubleshooting hints per category as a static info metric.
+	CategoryHintInfo = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kube_prober_error_category_hint_info",
+			Help: "Static mapping of error categories to actionable troubleshooting hints.",
+		},
+		[]string{"category", "hint"},
+	)
+)
+
+// RegisterMetrics registers all prober metrics with the provided Prometheus registry.
+func RegisterMetrics(reg prometheus.Registerer) {
+	reg.MustRegister(
+		LatencyHistogram,
+		TrafficCounter,
+		ErrorCounter,
+		SaturationGauge,
+		MaxWorkersGauge,
+		CategoryHintInfo,
+	)
+
+	// Populate static category hints directly from ErrorCategory.Hint()
+	categories := []ErrorCategory{
+		CategoryDNS,
+		CategoryConnect,
+		CategoryTLS,
+		CategoryTimeout,
+		CategoryHTTP,
+		CategoryUnknown,
+	}
+
+	for _, cat := range categories {
+		CategoryHintInfo.WithLabelValues(string(cat), cat.Hint()).Set(1)
+	}
+}
+
+// DeleteTargetMetrics removes Prometheus metric entries for a deleted target to prevent memory leaks.
+func DeleteTargetMetrics(target string) {
+	LatencyHistogram.DeleteLabelValues(target)
+	TrafficCounter.DeleteLabelValues(target)
+	SaturationGauge.DeleteLabelValues(target)
+
+	// Clean up all error categories for this target
+	categories := []ErrorCategory{
+		CategoryDNS,
+		CategoryConnect,
+		CategoryTLS,
+		CategoryTimeout,
+		CategoryHTTP,
+		CategoryUnknown,
+	}
+	for _, cat := range categories {
+		ErrorCounter.DeleteLabelValues(target, string(cat))
+	}
+}
+</file>
+
+<file path="pkg/prober/prober.go">
+package prober
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"net"
+	"net/http"
+	"time"
+	"io"
+)
+
+// ErrorCategory represents the 6 SRE error types
+type ErrorCategory string
+
+const (
+	CategoryDNS     ErrorCategory = "dns_error"
+	CategoryConnect ErrorCategory = "connection_refused"
+	CategoryTLS     ErrorCategory = "tls_error"
+	CategoryTimeout ErrorCategory = "timeout"
+	CategoryHTTP    ErrorCategory = "http_error"
+	CategoryUnknown ErrorCategory = "unknown_error"
+)
+
+// Hint returns actionable troubleshooting context for the SRE operator
+func (c ErrorCategory) Hint() string {
+	switch c {
+	case CategoryDNS:
+		return "Verify CoreDNS resolution, cluster domain suffixes, or Service name spelling"
+	case CategoryConnect:
+		return "Target pod might be down, crash-looping, or rejecting connections on specified port"
+	case CategoryTLS:
+		return "Check TLS certificate validity, SAN coverage, or CA trust store"
+	case CategoryTimeout:
+		return "Target is slow to respond; check upstream latency, network network policies, or resource limits"
+	case CategoryHTTP:
+		return "Application responded with 4xx/5xx; check application logs and payload specs"
+	case CategoryUnknown:
+		fallthrough
+	default:
+		return "Unclassified network or protocol error; inspect underlying OS/socket errors"
+	}
+}
+
+// MapToCategory unwraps the error chain and categorizes network/HTTP issues
+func MapToCategory(err error, statusCode int) ErrorCategory {
+	if err == nil {
+		if statusCode >= 400 {
+			return CategoryHTTP
+		}
+		return "" // Success, no error
+	}
+
+	// 1. Check for Context Timeout / Deadline Exceeded
+	if errors.Is(err, context.DeadlineExceeded) {
+		return CategoryTimeout
+	}
+
+	// 2. Check for TLS / Certificate errors
+	var certErr *x509.CertificateInvalidError
+	var unknownAuthErr *x509.UnknownAuthorityError
+	var recErr tls.RecordHeaderError
+	if errors.As(err, &certErr) || errors.As(err, &unknownAuthErr) || errors.As(err, &recErr) {
+		return CategoryTLS
+	}
+
+	// 3. Unwrap network-specific errors (DNS vs Connect vs Network Timeout)
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return CategoryDNS
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if opErr.Timeout() {
+			return CategoryTimeout
+		}
+		return CategoryConnect
+	}
+
+	return CategoryUnknown
+}
+
+type HTTPProber struct {
+	client *http.Client
+}
+
+// NewHTTPProber creates a new prober with sensible defaults
+func NewHTTPProber(client *http.Client) *HTTPProber {
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	return &HTTPProber{client: client}
+}
+
+// ProbeHTTPTarget executes the HTTP probe and maps the result to an SRE category
+func (p *HTTPProber) ProbeHTTPTarget(ctx context.Context, target string) ErrorCategory {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return MapToCategory(err, 0)
+	}
+
+	resp, err := p.client.Do(req)
+	var statusCode int
+	if resp != nil {
+		statusCode = resp.StatusCode
+		// Copy remaining body to io.Discard and close to enable TCP connection reuse
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+
+	return MapToCategory(err, statusCode)
+}
+</file>
+
+<file path="pkg/prober/registry_test.go">
+package prober
+
+import (
+	"fmt"
+	"sync"
+	"testing"
+	"slices"
+
+	discoveryv1 "k8s.io/api/discovery/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+func TestRegistry_UpdateAndRemoveEndpointSlice(t *testing.T) {
+	registry := NewRegistry()
+
+	port8080 := int32(8080)
+	sliceWithPort := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-slice-1",
+			Namespace: "default",
+		},
+		Ports: []discoveryv1.EndpointPort{
+			{Port: &port8080},
+		},
+		Endpoints: []discoveryv1.Endpoint{
+			{Addresses: []string{"10.244.0.5", "10.244.0.6"}},
+		},
+	}
+
+	// 1. Test Add with custom path
+	customPath := "/custom-health"
+	registry.UpdateFromEndpointSlice(sliceWithPort, customPath)
+
+	targets := registry.GetTargets()
+	if len(targets) != 2 {
+		t.Fatalf("expected 2 targets, got %d", len(targets))
+	}
+
+	expectedURL1 := "http://10.244.0.5:8080/custom-health"
+	expectedURL2 := "http://10.244.0.6:8080/custom-health"
+
+	if !slices.Contains(targets, expectedURL1) || !slices.Contains(targets, expectedURL2) {
+		t.Errorf("expected targets to contain %s and %s, got %v", expectedURL1, expectedURL2, targets)
+	}
+
+	// Verify events were emitted
+	if len(registry.Events) != 2 {
+		t.Fatalf("expected 2 events in channel, got %d", len(registry.Events))
+	}
+
+	// 2. Test Idempotency
+	registry.UpdateFromEndpointSlice(sliceWithPort, customPath)
+	if len(registry.Events) != 2 {
+		t.Errorf("expected 2 events total (0 new), got %d", len(registry.Events))
+	}
+
+	// 3. Test Remove with custom path
+	registry.RemoveEndpointSlice(sliceWithPort, customPath)
+	targets = registry.GetTargets()
+
+	if len(targets) != 0 {
+		t.Fatalf("expected 0 targets remaining, got %d", len(targets))
+	}
+}
+
+func TestRegistry_ConcurrencySafety(t *testing.T) {
+	registry := NewRegistry()
+	var wg sync.WaitGroup
+
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		ip := fmt.Sprintf("10.244.0.%d", i)
+
+		go func(addr string) {
+			defer wg.Done()
+			port := int32(80)
+			slice := &discoveryv1.EndpointSlice{
+				Ports:     []discoveryv1.EndpointPort{{Port: &port}},
+				Endpoints: []discoveryv1.Endpoint{{Addresses: []string{addr}}},
+			}
+			registry.UpdateFromEndpointSlice(slice, "/healthz")
+		}(ip)
+
+		go func() {
+			defer wg.Done()
+			_ = registry.GetTargets()
+		}()
+	}
+
+	wg.Wait()
+
+	targets := registry.GetTargets()
+	if len(targets) != 20 {
+		t.Errorf("expected 20 concurrent targets registered, got %d", len(targets))
+	}
+}
+</file>
+
+<file path="pkg/prober/worker_test.go">
+package prober
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+	"slices"
+)
+
+func TestContains(t *testing.T) {
+	slice := []string{"http://service-a", "http://service-b"}
+
+	if !slices.Contains(slice, "http://service-a") {
+		t.Errorf("expected slice to contain http://service-a")
+	}
+
+	if slices.Contains(slice, "http://service-c") {
+		t.Errorf("did not expect slice to contain http://service-c")
+	}
+}
+
+func TestWorkerPool_Execution(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	jobs := make(chan Job, 5)
+	dispatcher := NewDispatcher()
+
+	dispatcher.Register("http", func(ctx context.Context, target string) ErrorCategory {
+		return ""
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go WorkerPool(ctx, jobs, dispatcher, &wg)
+
+	jobs <- Job{Target: "http://example.com"}
+	close(jobs)
+
+	wg.Wait()
+}
+
+func TestTargetScheduler_Cancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	jobs := make(chan Job, 10)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go TargetScheduler(ctx, "http://test-target", jobs, 10*time.Millisecond, &wg)
+
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+
+	wg.Wait()
+	close(jobs)
+
+	count := 0
+	for range jobs {
+		count++
+	}
+
+	if count == 0 {
+		t.Errorf("expected scheduler to produce at least 1 job before cancellation")
+	}
+}
+</file>
+
+<file path="pkg/prober/worker.go">
+package prober
+
+import (
+	"context"
+	"log/slog"
+	"sync"
+	"time"
+)
+
+type Job struct {
+	Target string
+}
+
+// ProbeTarget executes a probe against a target and records 4 Golden Signals metrics.
+func ProbeTarget(ctx context.Context, target string, dispatcher *Dispatcher) {
+	SaturationGauge.WithLabelValues(target).Inc()
+	defer SaturationGauge.WithLabelValues(target).Dec()
+
+	TrafficCounter.WithLabelValues(target).Inc()
+
+	startTime := time.Now()
+	errCat := dispatcher.Execute(ctx, target)
+	duration := time.Since(startTime).Seconds()
+
+	LatencyHistogram.WithLabelValues(target).Observe(duration)
+
+	if errCat != "" {
+		ErrorCounter.WithLabelValues(target, string(errCat)).Inc()
+		slog.Warn("Target probing failed",
+			"target", target,
+			"error_category", errCat,
+			"hint", errCat.Hint(),
+		)
+	} else {
+		slog.Debug("Target probed successfully", "target", target, "duration_seconds", duration)
+	}
+}
+
+// WorkerPool processes incoming probe jobs.
+func WorkerPool(ctx context.Context, jobs <-chan Job, dispatcher *Dispatcher, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job, ok := <-jobs:
+			if !ok {
+				return
+			}
+			ProbeTarget(ctx, job.Target, dispatcher)
+		}
+	}
+}
+
+// TargetScheduler pushes probe jobs into the jobs channel periodically.
+func TargetScheduler(ctx context.Context, target string, jobs chan<- Job, interval time.Duration, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	select {
+	case jobs <- Job{Target: target}:
+	case <-ctx.Done():
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			select {
+			case jobs <- Job{Target: target}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+</file>
+
+<file path=".dockerignore">
+.git
+.github
+bin/
+dist/
+kube-prober
+*.out
+*.log
+</file>
+
+<file path=".env.example">
+# Slack Webhook URL for channel notifications
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK
+
+# Pushover Credentials for critical alerts
+PUSHOVER_USER_KEY=YOUR_PUSHOVER_USER_KEY
+PUSHOVER_API_TOKEN=YOUR_PUSHOVER_API_TOKEN
+</file>
+
+<file path="helm/kube-prober/values.yaml">
+# Replica count for the prober
+replicaCount: 1
+
+# Image configuration for the prober
+image:
+  repository: ghcr.io/demirdilek/kube-prober
+  pullPolicy: IfNotPresent
+  tag: "dev"
+
+# Service configuration for the prober
+service:
+  type: ClusterIP
+  port: 8080
+
+# Resource requests and limits for the prober container
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+# Mock/Fault-injection target (dev default)
+httpbin:
+  enabled: true
+</file>
+
+<file path="pkg/prober/informer.go">
+package prober
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	discoveryv1 "k8s.io/api/discovery/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
+)
+
+type TargetWatcher struct {
+	clientset kubernetes.Interface
+	registry  *Registry
+}
+
+func NewTargetWatcher(clientset kubernetes.Interface, reg *Registry) *TargetWatcher {
+	return &TargetWatcher{
+		clientset: clientset,
+		registry:  reg,
+	}
+}
+
+func (w *TargetWatcher) getProbePath(ctx context.Context, slice *discoveryv1.EndpointSlice) string {
+	svcName := slice.Labels["kubernetes.io/service-name"]
+	if svcName == "" {
+		return "/healthz"
+	}
+
+	svc, err := w.clientset.CoreV1().Services(slice.Namespace).Get(ctx, svcName, metav1.GetOptions{})
+	if err != nil || svc.Annotations == nil {
+		return "/healthz"
+	}
+
+	if path, exists := svc.Annotations["probe/path"]; exists && path != "" {
+		return path
+	}
+
+	return "/healthz"
+}
+
+func (w *TargetWatcher) Start(ctx context.Context) error {
+	factory := informers.NewSharedInformerFactoryWithOptions(
+		w.clientset,
+		10*time.Minute,
+	)
+
+	endpointSliceInformer := factory.Discovery().V1().EndpointSlices().Informer()
+
+	_, err := endpointSliceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
+				if slice.Labels["probe"] == "true" {
+					path := w.getProbePath(ctx, slice)
+					w.registry.UpdateFromEndpointSlice(slice, path)
+				}
+			}
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			if newSlice, ok := newObj.(*discoveryv1.EndpointSlice); ok {
+				path := w.getProbePath(ctx, newSlice)
+				if newSlice.Labels["probe"] == "true" {
+					w.registry.UpdateFromEndpointSlice(newSlice, path)
+				} else {
+					w.registry.RemoveEndpointSlice(newSlice, path)
+				}
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			slice, ok := obj.(*discoveryv1.EndpointSlice)
+			if !ok {
+				tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+				if !ok {
+					return
+				}
+				slice, ok = tombstone.Obj.(*discoveryv1.EndpointSlice)
+				if !ok {
+					return
+				}
+			}
+			if slice.Labels["probe"] == "true" {
+				path := w.getProbePath(ctx, slice)
+				w.registry.RemoveEndpointSlice(slice, path)
+			}
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to add event handler to EndpointSlice informer: %w", err)
+	}
+
+	factory.Start(ctx.Done())
+
+	if !cache.WaitForCacheSync(ctx.Done(), endpointSliceInformer.HasSynced) {
+		return fmt.Errorf("failed to sync informer cache: %w", ctx.Err())
+	}
+
+	return nil
+}
+</file>
+
+<file path="pkg/prober/prober_test.go">
+package prober
+
+import (
+	"context"
+	"net"
+	"testing"
+	"net/http"
+	"net/http/httptest"
+)
+
+func TestMapToCategory(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		statusCode int
+		expected   ErrorCategory
+	}{
+		{
+			name:       "HTTP Error",
+			err:        nil,
+			statusCode: 500,
+			expected:   CategoryHTTP,
+		},
+		{
+			name:       "DNS Resolution Error",
+			err:        &net.DNSError{},
+			statusCode: 0,
+			expected:   CategoryDNS,
+		},
+		{
+			name:       "Timeout Error",
+			err:        context.DeadlineExceeded,
+			statusCode: 0,
+			expected:   CategoryTimeout,
+		},
+		{
+			name:       "Success Target",
+			err:        nil,
+			statusCode: 200,
+			expected:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MapToCategory(tt.err, tt.statusCode)
+			if got != tt.expected {
+				t.Errorf("MapToCategory() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestErrorCategory_Hint(t *testing.T) {
+	if CategoryDNS.Hint() == "" {
+		t.Errorf("expected non-empty hint for CategoryDNS")
+	}
+	if CategoryHTTP.Hint() == "" {
+		t.Errorf("expected non-empty hint for CategoryHTTP")
+	}
+}
+
+func TestProbeHTTPTarget_BodyDiscarding(t *testing.T) {
+	// Mock HTTP server returning a payload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok payload"))
+	}))
+	defer ts.Close()
+
+	prober := NewHTTPProber(ts.Client())
+	errCat := prober.ProbeHTTPTarget(context.Background(), ts.URL)
+
+	if errCat != "" {
+		t.Errorf("expected no error category for successful probe, got %v", errCat)
+	}
+}
+</file>
+
+<file path="pkg/prober/registry.go">
+package prober
+
+import (
+	"fmt"
+	"strings"
+	"sync"
+
+	discoveryv1 "k8s.io/api/discovery/v1"
+)
+
+// TargetEvent represents a change in the discovered targets.
+type TargetEvent struct {
+	Target  string
+	IsAdded bool
+}
+
+type Registry struct {
+	mu      sync.RWMutex
+	targets map[string]string
+	Events  chan TargetEvent
+}
+
+func NewRegistry() *Registry {
+	return &Registry{
+		targets: make(map[string]string),
+		Events:  make(chan TargetEvent, 1000),
+	}
+}
+
+func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, path string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if path == "" {
+		path = "/healthz"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	portVal := int32(80)
+	if len(slice.Ports) > 0 && slice.Ports[0].Port != nil {
+		portVal = *slice.Ports[0].Port
+	}
+
+	for _, ep := range slice.Endpoints {
+		for _, addr := range ep.Addresses {
+			targetURL := fmt.Sprintf("http://%s:%d%s", addr, portVal, path)
+
+			if _, exists := r.targets[targetURL]; !exists {
+				r.targets[targetURL] = slice.Namespace
+				r.Events <- TargetEvent{Target: targetURL, IsAdded: true}
+			}
+		}
+	}
+}
+
+func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, path string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if path == "" {
+		path = "/healthz"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	portVal := int32(80)
+	if len(slice.Ports) > 0 && slice.Ports[0].Port != nil {
+		portVal = *slice.Ports[0].Port
+	}
+
+	for _, ep := range slice.Endpoints {
+		for _, addr := range ep.Addresses {
+			targetURL := fmt.Sprintf("http://%s:%d%s", addr, portVal, path)
+
+			if _, exists := r.targets[targetURL]; exists {
+				delete(r.targets, targetURL)
+				r.Events <- TargetEvent{Target: targetURL, IsAdded: false}
+			}
+		}
+	}
+}
+
+func (r *Registry) GetTargets() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	targets := make([]string, 0, len(r.targets))
+	for t := range r.targets {
+		targets = append(targets, t)
+	}
+	return targets
+}
+</file>
+
+<file path="pkg/prober/informer_test.go">
+package prober
+
+import (
+	"context"
+	"testing"
+	"time"
+	"slices"
+
+	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/cache"
+)
+
+func TestTargetWatcher_InformerEvents_DynamicPath(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	clientset := fake.NewSimpleClientset()
+	registry := NewRegistry()
+
+	// 1. Erstelle einen Fake Service mit custom probe/path Annotation
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-service",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"probe/path": "/custom-metrics",
+			},
+		},
+	}
+	_, err := clientset.CoreV1().Services("default").Create(ctx, svc, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create fake service: %v", err)
+	}
+
+	watcher := NewTargetWatcher(clientset, registry)
+
+	informerFactory := informers.NewSharedInformerFactory(clientset, 0)
+	endpointSliceInformer := informerFactory.Discovery().V1().EndpointSlices()
+
+	_, err = endpointSliceInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
+				path := watcher.getProbePath(ctx, slice)
+				registry.UpdateFromEndpointSlice(slice, path)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to add event handler to informer: %v", err)
+	}
+
+	informerFactory.Start(ctx.Done())
+
+	if !cache.WaitForCacheSync(ctx.Done(), endpointSliceInformer.Informer().HasSynced) {
+		t.Fatal("timed out waiting for informer caches to sync")
+	}
+
+	// 2. Erstelle ein EndpointSlice, das auf das Service verweist
+	port8080 := int32(8080)
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-slice",
+			Namespace: "default",
+			Labels: map[string]string{
+				"kubernetes.io/service-name": "test-service",
+				"probe":                      "true",
+			},
+		},
+		Ports: []discoveryv1.EndpointPort{
+			{Port: &port8080},
+		},
+		Endpoints: []discoveryv1.Endpoint{
+			{Addresses: []string{"10.244.0.15"}},
+		},
+	}
+
+	_, err = clientset.DiscoveryV1().EndpointSlices("default").Create(ctx, slice, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create fake endpoint slice: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	targets := registry.GetTargets()
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target discovered via informer, got %d", len(targets))
+	}
+
+	// 3. Verifiziere, dass der Pfad DYNAMISCH aus der Annotation ausgelesen wurde!
+	expectedURL := "http://10.244.0.15:8080/custom-metrics"
+	if !slices.Contains(targets, expectedURL) {
+		t.Errorf("expected target %s to be registered dynamically, got %v", expectedURL, targets)
+	}
+}
+</file>
+
+<file path="ROADMAP.md">
+# Production Readiness Roadmap
+
+This document outlines the planned improvements, architectural refinements, and feature milestones for `kube-prober`.
+
+---
+
+## Phase 1: High Priority (Bugs & Security Hardening)
+
+- [X] **RBAC Permissions Update (`helm/kube-prober/templates/rbac.yaml`)**
+  - Add `endpointslices` under the `discovery.k8s.io` API group to prevent HTTP 403 (Forbidden) errors during Informer synchronization inside Kubernetes clusters.
+- [X] **Kubernetes Probes Configuration (`helm/kube-prober/templates/deployment.yaml`)**
+  - Integrate native `livenessProbe` (`/healthz`) and `readinessProbe` (`/readyz`) endpoints into the deployment spec.
+- [X] **Pod Security Context Hardening (`helm/kube-prober/templates/deployment.yaml`)**
+  - Enforce non-root execution (`runAsNonRoot: true`), read-only root filesystems (`readOnlyRootFilesystem: true`), and drop all unneeded Linux capabilities (`capabilities.drop: ["ALL"]`).
+
+---
+
+## Phase 2: Medium Priority (Features & Reliability)
+
+- [X] **Dynamic Path Resolution via Informer (`pkg/prober/registry.go`)**
+  - Parse custom Service annotations (`probe/path`) dynamically via the Informer instead of hardcoding `/healthz` in the target URL builder.
+- [ ] **High Availability (HA) Setup**
+  - Add `PodDisruptionBudget` (PDB) and `HorizontalPodAutoscaler` (HPA) manifests to the Helm chart.
+- [X] **Metrics Clean-Up on Target Deletion**
+  - Unregister or clean up Prometheus metrics (Gauge/Counter labels) upon target deletion to avoid stale metrics and memory leaks.
+
+---
+
+## Phase 3: Low Priority & Enterprise Expansion
+
+- [ ] **SLO / SLI & Error Budget Exporting**
+  - Expose calculated multi-window burn rates directly as Prometheus metrics and ship pre-configured `PrometheusRule` manifests.
+- [ ] **Protocol Extension (gRPC / TCP / TLS)**
+  - Extend `prober.Dispatcher` with additional protocol handlers (e.g., gRPC Health Checking, TCP banner checks, TLS certificate expiry tracking).
+- [ ] **Chaos Engineering Test Suites**
+  - Define Chaos Mesh or LitmusChaos scenarios to validate telemetry accuracy during simulated network latency, packet loss, and pod eviction events.
+</file>
+
+<file path="Dockerfile">
+# ---------------------------------------------------
+# Stage 1: Build environment
+# ---------------------------------------------------
+FROM golang:alpine AS builder
+
+WORKDIR /app
+
+# Install CA certificates for outgoing HTTPS requests
+RUN apk add --no-cache ca-certificates
+
+# Cache dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build statically compiled and stripped binary
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o kube-prober .
+
+# ---------------------------------------------------
+# Stage 2: Minimal runtime image (~18 MB)
+# ---------------------------------------------------
+FROM scratch
+
+WORKDIR /app
+
+# Copy root CA certificates for TLS verification
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copy the compiled binary
+COPY --from=builder /app/kube-prober /app/kube-prober
+
+# Run application
+ENTRYPOINT ["/app/kube-prober"]
+</file>
+
+<file path="go.mod">
+module github.com/demirdilek/kube-prober
+
+go 1.26.1
+
+require (
+	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_model v0.6.2
+	k8s.io/api v0.36.3
+	k8s.io/apimachinery v0.36.3
+	k8s.io/client-go v0.36.3
+)
+
+require (
+	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-openapi/jsonpointer v0.21.0 // indirect
+	github.com/go-openapi/jsonreference v0.20.2 // indirect
+	github.com/go-openapi/swag v0.23.0 // indirect
+	github.com/google/gnostic-models v0.7.0 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/josharian/intern v1.0.0 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/mailru/easyjson v0.7.7 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
+	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/prometheus/common v0.70.1 // indirect
+	github.com/prometheus/procfs v0.21.1 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
+	go.yaml.in/yaml/v2 v2.4.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/term v0.45.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
+	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
+	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
+	gopkg.in/inf.v0 v0.9.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+	k8s.io/klog/v2 v2.140.0 // indirect
+	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
+	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2 // indirect
+	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
+	sigs.k8s.io/randfill v1.0.0 // indirect
+	sigs.k8s.io/structured-merge-diff/v6 v6.3.3 // indirect
+	sigs.k8s.io/yaml v1.6.0 // indirect
+)
+</file>
+
+<file path="main_test.go">
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// English comments as requested
+
+func TestGetEnvAsInt(t *testing.T) {
+	tests := []struct {
+		name         string
+		envKey       string
+		envVal       string
+		defaultVal   int
+		expectedVal  int
+		shouldSetEnv bool
+	}{
+		{
+			name:         "Default value when env is empty",
+			envKey:       "TEST_WORKERS_EMPTY",
+			envVal:       "",
+			defaultVal:   50,
+			expectedVal:  50,
+			shouldSetEnv: false,
+		},
+		{
+			name:         "Valid integer from env",
+			envKey:       "TEST_WORKERS_VALID",
+			envVal:       "100",
+			defaultVal:   50,
+			expectedVal:  100,
+			shouldSetEnv: true,
+		},
+		{
+			name:         "Fallback to default on invalid string",
+			envKey:       "TEST_WORKERS_INVALID",
+			envVal:       "invalid_int",
+			defaultVal:   50,
+			expectedVal:  50,
+			shouldSetEnv: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.shouldSetEnv {
+				t.Setenv(tt.envKey, tt.envVal)
+			} else {
+				os.Unsetenv(tt.envKey)
+			}
+
+			got := getEnvAsInt(tt.envKey, tt.defaultVal)
+			if got != tt.expectedVal {
+				t.Errorf("getEnvAsInt(%s, %d) = %d; want %d", tt.envKey, tt.defaultVal, got, tt.expectedVal)
+			}
+		})
+	}
+}
+
+func TestInitKubeClient_KubeconfigFallback(t *testing.T) {
+	// Point KUBECONFIG to a non-existent file to ensure clientcmd handles the path resolution
+	tempDir := t.TempDir()
+	fakeKubeconfig := filepath.Join(tempDir, "config")
+	t.Setenv("KUBECONFIG", fakeKubeconfig)
+
+	// Create a dummy minimal kubeconfig file
+	dummyConfig := `
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: http://127.0.0.1:8080
+  name: dummy
+contexts:
+- context:
+    cluster: dummy
+    user: dummy
+  name: dummy
+current-context: dummy
+users:
+- name: dummy
+`
+	if err := os.WriteFile(fakeKubeconfig, []byte(dummyConfig), 0600); err != nil {
+		t.Fatalf("failed to write dummy kubeconfig: %v", err)
+	}
+
+	clientset := initKubeClient()
+	if clientset == nil {
+		t.Fatal("expected non-nil kubernetes Clientset")
+	}
+}
+</file>
+
+<file path=".github/workflows/ci.yml">
+name: CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read 
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: true
+
+      - name: Run Tests
+        run: go test -v -race ./...
+
+      # 1. Login bei GHCR
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Short-SHA Tag extrahieren
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+
+      # 3. Image bauen & pushen
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+</file>
+
+<file path="prom-stack-values.yaml">
+# ==============================================================================
+# Prometheus Stack Configuration Template
+# SRE 4 Golden Signals, Multi-Channel Alerting & Actionable Diagnostics
+# ==============================================================================
+
+alertmanager:
+  enabled: true
+  config:
+    global:
+      resolve_timeout: 5m
+
+    # --------------------------------------------------------------------------
+    # Alert Routing Tree
+    # --------------------------------------------------------------------------
+    route:
+      receiver: 'slack-notifications'
+      group_by: ['alertname', 'severity', 'category']
+      group_wait: 10s
+      group_interval: 30s
+      repeat_interval: 12h
+      routes:
+        # Suppress Prometheus internal watchdog alert
+        - matchers:
+            - alertname = Watchdog
+          receiver: 'null'
+
+        # Route 1: Critical alerts trigger immediate Pushover notification (Priority 1)
+        # continue: true allows critical alerts to also flow into Slack
+        - matchers:
+            - severity = critical
+          receiver: 'pushover-notifications'
+          continue: true
+
+        # Route 2: All severity levels (info, warning, critical) flow into Slack
+        - matchers:
+            - severity =~ "info|warning|critical"
+          receiver: 'slack-notifications'
+
+    # --------------------------------------------------------------------------
+    # Receivers & Notification Channels
+    # --------------------------------------------------------------------------
+    receivers:
+      - name: 'null'
+
+      # Slack Receiver (Dynamic SRE Alert Template)
+      - name: 'slack-notifications'
+        slack_configs:
+          - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+            send_resolved: true
+            title: '{{ if eq .Status "firing" }}:warning: [{{ .CommonLabels.severity | toUpper }}]{{ else }}:white_check_mark: [RESOLVED]{{ end }} {{ .CommonLabels.alertname }}'
+            text: >-
+              <!here>
+              *Time:* {{ (index .Alerts 0).StartsAt.Format "15:04:05 MST" }}
+              {{ if .CommonAnnotations.summary }}*Summary:* {{ .CommonAnnotations.summary }}{{ end }}
+              {{ if .CommonLabels.category }}*Error Category:* `{{ .CommonLabels.category }}`{{ end }}
+              {{ if .CommonAnnotations.description }}*Description:* {{ .CommonAnnotations.description }}{{ end }}
+              {{ if .CommonAnnotations.hint }}
+              *Actionable Diagnostic Hint:*
+              > {{ .CommonAnnotations.hint }}
+              {{ end }}
+
+      # Pushover Receiver (High-Priority Mobile Push)
+      - name: 'pushover-notifications'
+        pushover_configs:
+          - user_key: 'YOUR_PUSHOVER_USER_KEY'
+            token: 'YOUR_PUSHOVER_API_TOKEN'
+            priority: '1' # Priority 1 bypasses hardware silent switches on mobile devices
+            sound: 'alien'
+            send_resolved: true
+            title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ if .CommonLabels.category }}{{ .CommonLabels.category }}{{ else }}system{{ end }})'
+            message: |-
+              Summary: {{ .CommonAnnotations.summary }}
+              
+              Hint: {{ .CommonAnnotations.hint }}
+
+# ------------------------------------------------------------------------------
+# Grafana Configuration (Default Home Dashboard & Provisioning)
+# ------------------------------------------------------------------------------
+grafana:
+  # Sets the default home dashboard displayed upon opening the Grafana UI
+  grafana.ini:
+    dashboards:
+      default_home_dashboard_path: /tmp/dashboards/kube_prober_dashboard.json
+
+  # Enables sidecar auto-discovery for Grafana dashboards defined via ConfigMaps
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+</file>
+
+<file path=".gitignore">
+# ==========================================
+# Go Binaries & Build Output
+# ==========================================
+# Root binary (mit / damit helm/kube-prober nicht blockiert wird)
+/kube-prober
+bin/
+dist/
+out/
+*.exe
+*.exe_with_dbg
+*.dll
+*.so
+*.dylib
+
+# ==========================================
+# Go Test & Profile Data
+# ==========================================
+*.out
+*.prof
+*.test
+coverage.txt
+
+# ==========================================
+# Go Dependencies
+# ==========================================
+vendor/
+
+# ==========================================
+# Local Dev, Environment & Data
+# ==========================================
+.env
+.env.local
+*.log
+*.pid
+grafana-storage/
+prometheus-data/
+prom-stack-values.local.yaml
+
+# ==========================================
+# Editors & IDEs
+# ==========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+notes.md
+
+# ==========================================
+# Archives
+# ==========================================
+*.tar
+*.tar.gz
+*.tgz
+</file>
+
+<file path="Makefile">
+-include .env
+export
+
+.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall helm-install-prod local-deploy local-deploy-clean hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-targets-enable test-targets-disable trigger-slow-alert test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-clean dev-enable dev-disable dev-status
+
+.DEFAULT_GOAL := help
+
+# Container registry configuration
+IMAGE_REPO=ghcr.io/demirdilek/kube-prober
+IMAGE_TAG=dev
+
+ARGOCD_MANIFEST_URL ?= https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+TAILSCALE_IP ?= $(shell tailscale ip -4 2>/dev/null || echo "localhost")
+
+# Helm variables
+RELEASE_NAME=kube-prober
+CHART_DIR=./helm/kube-prober
+
+# Argo CD variables
+ARGO_APP ?= kube-prober
+ARGO_NAMESPACE ?= argocd
+
+help: ## Show this help message
+	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Targets:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+lint: ## Run golangci-lint or go vet for code quality
+	@echo "==> Running linter..."
+	@if command -v golangci-lint > /dev/null; then \
+		golangci-lint run ./...; \
+	else \
+		echo "golangci-lint not installed, running go vet..."; \
+		go vet ./...; \
+	fi
+
+test: ## Run unit and integration tests with race detection
+	@echo "==> Running tests with race detector..."
+	go test -v -race ./...
+
+test-coverage: ## Run tests and generate HTML coverage report
+	@echo "==> Generating test coverage..."
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+
+k3d-up: ## 1. Create a local k3d Kubernetes cluster
+	@if k3d cluster list | grep -q "mycluster"; then \
+		echo "Cluster 'mycluster' already exists."; \
+	else \
+		k3d cluster create mycluster --api-port 6443 -p "80:80@loadbalancer" -p "443:443@loadbalancer" --agents 2; \
+	fi
+
+docker-build: lint test ## 2. Build local Docker image and import into k3d (runs lint & test first)
+	@echo "==> Building Docker image..."
+	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
+	@echo "==> Importing image into k3d..."
+	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
+
+clean-build: ## Force a clean build by wiping BuildKit cache
+	docker builder prune --all -f
+	docker build --no-cache -t $(IMAGE_REPO):$(IMAGE_TAG) .
+
+prometheus-install: ## Install/upgrade kube-prometheus-stack via Helm (supports local override & .env secrets)
+	@./scripts/deploy-prometheus.sh
+
+install-argocd: ## 4. Install Argo CD components into the cluster
+	@echo "==> Installing Argo CD..."
+	kubectl create namespace argocd || true
+	kubectl apply -n argocd --server-side --force-conflicts -f $(ARGOCD_MANIFEST_URL)
+	@echo "==> Waiting for Argo CD components to be ready..."
+	kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=300s
+
+apply-gitops: ## 5. Register the kube-prober application in Argo CD
+	@echo "==> Registering kube-prober Application in Argo CD..."
+	kubectl apply -f deploy/argocd/kube-prober-app.yaml
+
+helm-install: ## 6. Deploy application Helm chart (kube-prober)
+	helm upgrade --install $(RELEASE_NAME) $(CHART_DIR)
+
+dev-enable: ## Pause Argo CD Auto-Sync & Self-Healing for local debugging
+	@echo "==> Disabling Argo CD Auto-Sync for $(ARGO_APP)..."
+	kubectl patch application $(ARGO_APP) -n $(ARGO_NAMESPACE) --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+
+dev-disable: ## Re-enable Argo CD Auto-Sync & Self-Healing
+	@echo "==> Re-enabling Argo CD Auto-Sync for $(ARGO_APP)..."
+	kubectl patch application $(ARGO_APP) -n $(ARGO_NAMESPACE) --type merge -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
+
+dev-status: ## Check if Argo CD Auto-Sync is currently enabled or disabled
+	@kubectl get application $(ARGO_APP) -n $(ARGO_NAMESPACE) -o jsonpath='{"Auto-Sync status: "}{.spec.syncPolicy.automated}{"\n"}'
+
+local-deploy: dev-enable lint test docker-build ## Fast local rebuild, import, pause GitOps, and rollout restart
+	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
+	kubectl rollout restart deployment $(RELEASE_NAME)
+
+local-deploy-clean: dev-enable clean-build ## Force clean build, import, and rollout restart without cache
+	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
+	kubectl rollout restart deployment $(RELEASE_NAME)
+
+all: k3d-up prometheus-install install-argocd apply-gitops helm-install ## Bootstrap entire local stack out-of-the-box (GitOps managed)
+	@echo "========================================================="
+	@echo " kube-prober stack is fully up and running out-of-the-box! "
+	@echo "========================================================="
+
+helm-upgrade: ## Upgrade existing kube-prober Helm release
+	helm upgrade $(RELEASE_NAME) $(CHART_DIR)
+
+helm-uninstall: ## Remove kube-prober Helm release
+	helm uninstall $(RELEASE_NAME) || true
+
+helm-install-prod: ## Deploy Helm chart with Production overrides (no httpbin)
+	helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) -f $(CHART_DIR)/values-prod.yaml
+
+k3d-down: ## Delete local k3d cluster
+	k3d cluster delete mycluster || true
+
+clean: k3d-down ## Clean up cluster and temporary build files
+	rm -f coverage.out coverage.html .argo.pid .prom.pid .grafana.pid
+
+forward-all: ## Forward Argo CD, Prometheus & Grafana UIs for Mobile/Tailscale
+	@./scripts/forward-all.sh
+
+stop-forward: ## Stop background port-forwarding
+	@pkill -f "kubectl port-forward" 2>/dev/null || true
+	@rm -f .argo.pid .prom.pid .grafana.pid
+	@echo "Stopped all port-forwards."
+
+argocd-pass: ## Retrieve initial admin password for Argo CD UI
+	@echo "==> Argo CD Initial Admin Password:"
+	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d || echo "Initial secret deleted. Use custom patched password or check argocd-secret." ; echo""
+
+hard-reset: clean all ## Deep clean cluster and rebuild stack fresh
+
+test-targets-enable: ## Scale up test targets to simulate traffic and latency
+	@echo "Enabling test targets (httpbin-slow, httpbin)..."
+	kubectl scale deployment httpbin-slow --replicas=1 -n default 2>/dev/null || true
+	kubectl scale deployment httpbin --replicas=1 -n default 2>/dev/null || true
+
+test-targets-disable: ## Scale down test targets to 0 replicas (clean baseline)
+	@echo "Disabling test targets to avoid resource usage..."
+	kubectl scale deployment httpbin-slow --replicas=0 -n default 2>/dev/null || true
+	kubectl scale deployment httpbin --replicas=0 -n default 2>/dev/null || true
+
+trigger-slow-alert: test-targets-enable ## Scale up slow endpoint to trigger HighLatency alert
+	@echo "httpbin-slow enabled. HighLatency alert should fire within ~2 minutes."
+
+test-alert-error: ## Simulate High Error Rate (HTTP 500)
+	@./scripts/alerts/trigger-error.sh
+
+test-alert-latency: ## Simulate High Latency (/delay/2)
+	@./scripts/alerts/trigger-latency.sh
+
+test-alert-traffic: ## Simulate Traffic Collapse (scale to 0)
+	@./scripts/alerts/trigger-traffic.sh
+
+test-alert-saturation: ## Simulate Worker Capacity Saturation (WORKERS=2)
+	@./scripts/alerts/trigger-saturation.sh
+
+test-alert-clean: test-targets-disable ## Clean up all simulated alert targets and scale replicas to 0
+	@./scripts/alerts/cleanup-all.sh
+</file>
+
+<file path="main.go">
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/demirdilek/kube-prober/pkg/prober"
+	"github.com/demirdilek/kube-prober/pkg/server"
+)
+
+func init() {
+	prober.RegisterMetrics(prometheus.DefaultRegisterer)
+}
+
+func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
+	numWorkers := getEnvAsInt("WORKERS", 50)
+	prober.MaxWorkersGauge.Set(float64(numWorkers))
+	jobQueueSize := getEnvAsInt("QUEUE_SIZE", 10000)
+	probeInterval := time.Duration(getEnvAsInt("PROBE_INTERVAL_SECONDS", 2)) * time.Second
+	httpTimeout := time.Duration(getEnvAsInt("HTTP_TIMEOUT_SECONDS", 5)) * time.Second
+
+	httpClient := &http.Client{
+		Timeout: httpTimeout,
+		Transport: &http.Transport{
+			MaxIdleConns:        getEnvAsInt("MAX_IDLE_CONNS", 1000),
+			MaxIdleConnsPerHost: getEnvAsInt("MAX_IDLE_CONNS_PER_HOST", 100),
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+
+	httpProber := prober.NewHTTPProber(httpClient)
+	dispatcher := prober.NewDispatcher()
+	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
+	dispatcher.Register("https", httpProber.ProbeHTTPTarget)
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	jobs := make(chan prober.Job, jobQueueSize)
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go prober.WorkerPool(ctx, jobs, dispatcher, &wg)
+	}
+
+	clientset := initKubeClient()
+	registry := prober.NewRegistry()
+	watcher := prober.NewTargetWatcher(clientset, registry)
+
+	go func() {
+		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("Informer watcher stopped", "error", err)
+		}
+	}()
+
+	activeSchedulers := make(map[string]context.CancelFunc)
+	var schedMu sync.Mutex
+
+go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evt := <-registry.Events:
+				schedMu.Lock()
+				
+				if evt.IsAdded {
+					if _, exists := activeSchedulers[evt.Target]; !exists {
+						slog.Info("New target discovered", "target", evt.Target)
+						schedCtx, schedCancel := context.WithCancel(ctx)
+						activeSchedulers[evt.Target] = schedCancel
+						
+						wg.Add(1)
+						go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &wg)
+					}
+					} else {
+							if cancelFunc, exists := activeSchedulers[evt.Target]; exists {
+							slog.Info("Target removed", "target", evt.Target)
+							cancelFunc()
+							delete(activeSchedulers, evt.Target)
+							prober.DeleteTargetMetrics(evt.Target) // <--- Clean up metrics here
+						}
+					}	
+				schedMu.Unlock()
+			}
+		}
+	}()
+
+	srv := server.New(":8080")
+	go srv.Start()
+
+	<-ctx.Done()
+	slog.Info("Shutting down cleanly...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	_ = srv.Shutdown(shutdownCtx)
+	wg.Wait()
+	slog.Info("Goodbye.")
+}
+
+func initKubeClient() *kubernetes.Clientset {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		kubeconfig := os.Getenv("KUBECONFIG")
+		if kubeconfig == "" {
+			kubeconfig = filepath.Join(os.Getenv("HOME"), ".kube", "config")
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			slog.Error("Failed to build k8s config", "error", err)
+			os.Exit(1)
+		}
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		slog.Error("Failed to create k8s clientset", "error", err)
+		os.Exit(1)
+	}
+	return clientset
+}
+
+func getEnvAsInt(name string, defaultVal int) int {
+	valStr := os.Getenv(name)
+	if valStr == "" {
+		return defaultVal;
+	}
+	val, err := strconv.Atoi(valStr)
+	if err != nil {
+		return defaultVal;
+	}
+	return val
+}
+</file>
+
+<file path="README.md">
+# kube-prober
+
+[![CI](https://github.com/demirdilek/kube-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/kube-prober/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/kube-prober?color=00ADD8&logo=go)](https://github.com/demirdilek/kube-prober)
+[![Image Size](https://img.shields.io/badge/image%20size-29.5%20MB-blue?logo=docker)](https://github.com/demirdilek/kube-prober/pkgs/container/kube-prober)
+
+`kube-prober` is a lightweight Kubernetes-native probing controller written in Go. It dynamically discovers endpoints via Kubernetes `EndpointSlices` using a `SharedInformer` and performs health and performance probes using a concurrency-safe worker pool. Metrics (4 Golden Signals) and lifecycle endpoints are exposed for Prometheus integration.
+
+---
+
+## 📦 Container Image Specs
+
+- **Registry:** `ghcr.io/demirdilek/kube-prober:latest`
+- **Base Image:** `scratch` (Minimalist & secure zero-OS runtime)
+- **Architecture:** Multi-Arch (`amd64` / `arm64`)
+
+---
+
+## Key Features
+
+- **Event-Driven K8s Target Discovery:** Replaces high-overhead API polling with modern `discoveryv1.EndpointSlice` Kubernetes Informers.
+  - Monitored endpoints are filtered by the Service label `probe: "true"`.
+  - Custom paths can be annotated via `probe/path: "/healthz"`.
+- **Dynamic K8s Targets:** Monitored endpoints are dynamically discovered via Kubernetes API labels (`probe=true`) and custom path annotations (`probe/path="/healthz"`).
+- **6-Tier SRE Error Classification:** Categorizes failures into discrete buckets: `dns_error`, `connection_refused`, `tls_error`, `timeout`, `http_error` (4xx/5xx), and `unknown_error`.
+- **Actionable SRE Diagnostic Hints:** Error metrics and alerts automatically carry context-aware recovery steps (`hint`) for all 6 failure categories (e.g., DNS, TLS, Timeout, HTTP 5xx), significantly lowering Mean Time To Recovery (MTTR) for on-call engineers.
+- **Dynamic Alertmanager Routing:** Clean, non-empty alert notifications dynamically formatted for both Slack ChatOps and high-priority Pushover mobile push notifications.
+- **GitOps Continuous Delivery:** Fully automated deployment, sync, and self-healing managed declaratively via Argo CD.
+- **Declarative Telemetry Stack:** Pre-configured Prometheus monitoring, Grafana sidecars, and Alertmanager routing via `prom-stack-values.yaml`.
+- **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down without dropping in-flight probes.
+- **Multi-Channel Alert Routing:** Dynamic Alertmanager routing featuring dual-channel notification delivery:
+  - **Slack:** Full audit trail and ChatOps visibility for all alert states (`warning`, `critical`, `RESOLVED`).
+  - **Pushover:** High-priority mobile push notifications (bypassing hardware silent switches via Priority 1) for `critical` incidents.
+
+---
+
+## Tech Stack & Architecture
+
+- **Go (Golang):** Core microservice architecture featuring native API probing and Prometheus instrumentation.
+- **Kubernetes:** Event-driven target discovery utilizing modern `discoveryv1.EndpointSlice` Kubernetes Informers.
+- **Argo CD:** GitOps controller executing continuous delivery and automated cluster state synchronization.
+- **Prometheus & Grafana:** Full observability stack measuring the 4 Golden Signals.
+- **Alertmanager:** Production-ready alert routing with severity classification (`warning`, `critical`).
+
+---
+
+## Architecture Overview
+
+The `kube-prober` microservice acts as the central observability engine. Using a Kubernetes Informer, it streams target changes directly from the API server into a local, thread-safe memory registry before executing HTTP/DNS probes and exporting 4 Golden Signals telemetry.
+
+```text
+[ K8s Control Plane ] --(EndpointSlice Watch Stream)--> [ kube-prober Informer ]
+                                                                 |
+                                                    (Thread-Safe Local Registry)
+                                                                 |
+                                                    (Concurrent HTTP/DNS Probes)
+                                                                 v
+                                                        [ Target Services ]
+                                                                 |
+                                                        (Prometheus Metrics)
+                                                                 v
+                                                           [ Prometheus ]
+                                                                 |
+                                                            (Alert Rules)
+                                                                 v
+                                                           [ Alertmanager ]
+                                                                 |
+                                                      (Webhooks / Slack / Push)
+                                                                 v
+                                                           [ SRE On-Call ]
+```
+
+---
+
+## Project Structure
+
+```text
+.
+├── .github/
+│   └── workflows/          # GitHub Actions CI & Docker Build Pipelines
+├── assets/                 # Documentation Screenshots
+├── deploy/
+│   └── argocd/             # Argo CD Application Manifests (GitOps)
+├── helm/
+│   └── kube-prober/         # Custom Helm Chart (Deployment, RBAC, ServiceMonitor, Dashboard)
+│       ├── dashboards/     # Auto-provisioned Grafana Dashboards
+│       └── templates/      # K8s Resources & Alerting Rules
+├── pkg/
+│   └── prober/             # Core HTTP Probing Engine, K8s EndpointSlice Informers & Metrics
+│   └── server/             # Health, Readiness, Pprof & Metrics HTTP Server
+├── Dockerfile              # Multi-stage, Multi-arch Build File
+├── Makefile                # Complete Lifecycle Automation (k3d, Argo CD, Helm)
+├── main.go                 # Entry Point & Dynamic K8s Service Watcher
+├── main_test.go            # Unit and Integration Tests
+└── prom-stack-values.yaml  # Prometheus Stack & Alertmanager Routing Config
+```
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Docker / Buildx
+- k3d / Kubernetes
+- Helm 3+
+- GNU Make
+
+---
+
+## Local Cluster Lifecycle & Deployment
+
+You can manage the local development cluster and the entire stack lifecycle using the provided `Makefile`:
+
+```bash
+# Spin up the entire stack from scratch (k3d, Docker build, Prometheus, Argo CD, Helm deployment)
+make all
+
+# Fast local rebuild, import, pause GitOps auto-sync, and rollout restart for local debugging
+make local-deploy
+
+# Pause Argo CD Auto-Sync & Self-Healing for local debugging
+make dev-enable
+
+# Re-enable Argo CD Auto-Sync & Self-Healing
+make dev-disable
+
+# Delete local k3d cluster and clean up local artifacts
+make clean
+
+# Start background port-forwarding for Argo CD (8080), Prometheus (9090), and Grafana (3000)
+make forward-all
+
+# Stop background port-forwarding
+make stop-forward
+
+# Run unit and integration tests with the race detector enabled
+make test
+```
+
+![Kubernetes Pods](assets/pods.png)
+
+---
+
+## Observability & Dashboards
+
+The Grafana dashboard is **fully auto-provisioned out of the box** via the Prometheus Operator sidecar mechanism (`grafana_dashboard: "1"`), requiring zero manual JSON imports or configuration. It visualizes real-time telemetry for all 4 Golden Signals: Latency, Traffic, Errors, and Saturation.
+
+Once background port-forwarding is active (`make forward-all`), access the Control Plane UIs via your browser or Tailscale network:
+
+- **Argo CD:** [https://localhost:8080](https://localhost:8080) or [https://<TAILSCALE_IP>:8080](https://<TAILSCALE_IP>:8080)
+- **Prometheus:** [http://localhost:9090](http://localhost:9090) or [http://<TAILSCALE_IP>:9090](http://<TAILSCALE_IP>:9090)
+- **Grafana:** [http://localhost:3000](http://localhost:3000) or [http://<TAILSCALE_IP>:3000](http://<TAILSCALE_IP>:3000)
+
+| Argo CD Control Plane | Prometheus Target Telemetry |
+| :---: | :---: |
+| ![Argo](assets/argo.png) | ![Prometheus](assets/prometheus.png) |
+
+| Grafana 4 Golden Signals Dashboard | Structured Slog Output |
+| :---: | :---: |
+| ![Grafana Dashboard](assets/grafana-dashboard.png) | ![Slog Output](assets/slog-output.png) |
+
+---
+
+## Alerting & Escalation
+
+Real-time telemetry evaluation is managed via Prometheus Alertmanager based on defined thresholds for the 4 Golden Signals. Alerts are pre-classified by severity (`warning` vs. `critical`) and can be seamlessly routed to Webhooks, PagerDuty, Opsgenie, or Slack.
+
+### Simulating Alerts
+
+The setup allows you to simulate threshold violations for different Golden Signals out of the box:
+
+#### 1. High Latency Alert
+
+The Helm chart automatically provisions a target called `httpbin-slow` which simulates delayed responses (`/delay/1`). Once Prometheus evaluates the high p99 latency threshold over the defined timeframe, Alertmanager triggers the `HighLatency` rule.
+
+#### 2. High Error Rate Alert (Dynamic Discovery & Error Target Simulation)
+
+You can trigger a real-time HTTP 500 error alert using the Makefile.
+Deploy an artificial error target with the required `probe: "true"` label:
+
+```bash
+# Deploy an artificial error target (HTTP 500)
+make test-alert
+
+# Clean up the error target after testing
+make test-alert-clean
+```
+
+The Go engine will dynamically discover the new endpoint instantly via its event-driven Kubernetes Informer stream and start probing it. Shortly after, the `HighErrorRate` rule fires in Prometheus and escalates to Alertmanager.
+
+### Multi-Channel Alert Routing Matrix
+
+| Slack Audit Trail (`#alerts`) | Pushover Detailed View |
+| :---: | :---: |
+| ![Slack Alert](assets/slack.png) | ![Pushover Push](assets/pushover.png) |  
+
+### Roadmap & Production Readiness
+
+Check out our [ROADMAP.md](ROADMAP.md) for planned features, upcoming architectural refinements, and production readiness milestones.
+</file>
+
+</files>

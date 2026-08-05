@@ -18,16 +18,16 @@ spec:
             summary: '{{`High p99 latency on target {{ $labels.target }}`}}'
             hint: "Check CPU/Memory utilization, database connections, or network policies on upstream target."
 
-        # 2. Traffic: Traffic Collapse / No Probes Executing
+# 2. Traffic: Traffic Collapse / Total Outage
         - alert: TrafficCollapse
-          expr: sum(rate(kube_prober_traffic_total[2m])) by (target) == 0
+          expr: (sum(rate(kube_prober_errors_total[2m])) by (target) == sum(rate(kube_prober_traffic_total[2m])) by (target)) and (sum(rate(kube_prober_traffic_total[2m])) by (target) > 0)
           for: 1m
           labels:
             severity: critical
           annotations:
-            summary: '{{`Traffic collapse on target {{ $labels.target }}`}}'
-            hint: "Check if prober workers are saturated or if the target EndpointSlice was unexpectedly deleted."
-
+            summary: '{{`Traffic collapse / total outage on target {{ $labels.target }}`}}'
+            hint: "Check if prober workers are failing to reach the endpoint or if the target service port is misconfigured."
+            
         # 3. Errors: High failure rate
         - alert: HighErrorRate
           expr: sum(increase(kube_prober_errors_total[2m])) by (target) > 0

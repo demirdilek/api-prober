@@ -18,3 +18,6 @@ if kubectl get deployment kube-prober >/dev/null 2>&1; then
 fi
 
 echo "==> Cleanup complete! Cluster restored to default state."
+
+# Set the port to normal state(:8080). It is for the trigger-traffic.sh script
+kubectl patch service httpbin-success -n default --type=merge -p '{"spec":{"ports":[{"port":80,"targetPort":80}]}}' 2>/dev/null || true
