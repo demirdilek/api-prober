@@ -41,7 +41,7 @@ func TestTargetWatcher_InformerEvents_DynamicPath(t *testing.T) {
 	informerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	endpointSliceInformer := informerFactory.Discovery().V1().EndpointSlices()
 
-	endpointSliceInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, err = endpointSliceInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
 				path := watcher.getProbePath(ctx, slice)
@@ -49,6 +49,9 @@ func TestTargetWatcher_InformerEvents_DynamicPath(t *testing.T) {
 			}
 		},
 	})
+	if err != nil {
+		t.Fatalf("failed to add event handler to informer: %v", err)
+	}
 
 	informerFactory.Start(ctx.Done())
 
