@@ -148,7 +148,7 @@ grafana:
   # Sets the default home dashboard displayed upon opening the Grafana UI
   grafana.ini:
     dashboards:
-      default_home_dashboard_path: /tmp/dashboards/kube-prober-dashboard.json
+      default_home_dashboard_path: /tmp/dashboards/kube_prober_dashboard.json
 
   # Enables sidecar auto-discovery for Grafana dashboards defined via ConfigMaps
   sidecar:
