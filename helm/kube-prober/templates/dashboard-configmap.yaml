@@ -1,9 +1,11 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: "{{ .Release.Name }}-dashboard"
+  name: kube-prober-dashboard
+  namespace: default
   labels:
-    {{ .Values.dashboards.label }}: {{ .Values.dashboards.labelValue | quote }}
+    grafana_dashboard: "1"
+    app.kubernetes.io/name: kube-prober
 data:
   kube_prober_dashboard.json: |-
-    {{- .Files.Get "dashboards/kube_prober_dashboard.json" | nindent 4 }}
+{{ .Files.Get "dashboards/kube_prober_dashboard.json" | indent 4 }}

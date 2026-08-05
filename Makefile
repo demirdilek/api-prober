@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall local-deploy hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-alert test-alert-clean dev-enable dev-disable
+.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall helm-install-prod local-deploy hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-targets-enable test-targets-disable trigger-slow-alert test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-clean dev-enable dev-disable
 
 .DEFAULT_GOAL := help
 
@@ -24,7 +24,7 @@ help: ## Show this help message
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 lint: ## Run golangci-lint or go vet for code quality
 	@echo "==> Running linter..."
@@ -62,24 +62,7 @@ clean-build: ## Force a clean build by wiping BuildKit cache
 	docker build --no-cache -t $(IMAGE_REPO):$(IMAGE_TAG) .
 
 prometheus-install: ## Install/upgrade kube-prometheus-stack via Helm (supports local override & .env secrets)
-	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-	helm repo update
-	@if [ -f prom-stack-values.local.yaml ]; then \
-		echo "==> Applying Prometheus stack with local overrides and .env secrets..."; \
-		helm upgrade --install prom-stack prometheus-community/kube-prometheus-stack \
-			-f prom-stack-values.yaml \
-			-f prom-stack-values.local.yaml \
-			--set alertmanager.config.receivers[1].slack_configs[0].api_url=$(SLACK_WEBHOOK_URL) \
-			--set alertmanager.config.receivers[2].pushover_configs[0].user_key=$(PUSHOVER_USER_KEY) \
-			--set alertmanager.config.receivers[2].pushover_configs[0].token=$(PUSHOVER_API_TOKEN); \
-	else \
-		echo "==> Applying base Prometheus stack configuration with .env secrets..."; \
-		helm upgrade --install prom-stack prometheus-community/kube-prometheus-stack \
-			-f prom-stack-values.yaml \
-			--set alertmanager.config.receivers[1].slack_configs[0].api_url=$(SLACK_WEBHOOK_URL) \
-			--set alertmanager.config.receivers[2].pushover_configs[0].user_key=$(PUSHOVER_USER_KEY) \
-			--set alertmanager.config.receivers[2].pushover_configs[0].token=$(PUSHOVER_API_TOKEN); \
-	fi
+	@./scripts/deploy-prometheus.sh
 
 install-argocd: ## 4. Install Argo CD components into the cluster
 	@echo "==> Installing Argo CD..."
@@ -118,6 +101,9 @@ helm-upgrade: ## Upgrade existing kube-prober Helm release
 helm-uninstall: ## Remove kube-prober Helm release
 	helm uninstall $(RELEASE_NAME) || true
 
+helm-install-prod: ## Deploy Helm chart with Production overrides (no httpbin)
+	helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) -f $(CHART_DIR)/values-prod.yaml
+
 k3d-down: ## Delete local k3d cluster
 	k3d cluster delete mycluster || true
 
@@ -125,28 +111,7 @@ clean: k3d-down ## Clean up cluster and temporary build files
 	rm -f coverage.out coverage.html .argo.pid .prom.pid .grafana.pid
 
 forward-all: ## Forward Argo CD, Prometheus & Grafana UIs for Mobile/Tailscale
-	@echo "========================================================"
-	@echo " CONTROL PLANE WEB UIs (Tailscale / iPhone Access)"
-	@echo "========================================================"
-	@echo " ARGO CD:    https://$(TAILSCALE_IP):8080"
-	@echo "   User:     admin"
-	@echo -n "   Password: "
-	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" | base64 -d 2>/dev/null || echo "Not found"
-	@echo " "
-	@echo "--------------------------------------------------------"
-	@echo " PROMETHEUS: http://$(TAILSCALE_IP):9090"
-	@echo "--------------------------------------------------------"
-	@echo " GRAFANA:    http://$(TAILSCALE_IP):3000"
-	@echo "   User:     admin"
-	@echo -n "   Password: "
-	@kubectl -n default get secret prom-stack-grafana -o jsonpath="{.data.admin-password}" | base64 -d 2>/dev/null || echo "admin"
-	@echo " "
-	@echo "========================================================"
-	@echo "==> Starting Port-Forwards in background..."
-	@kubectl port-forward --address 0.0.0.0 -n argocd svc/argocd-server 8080:443 >/dev/null 2>&1 & echo $$! > .argo.pid
-	@kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-kube-prometheus-prometheus 9090:9090 >/dev/null 2>&1 & echo $$! > .prom.pid
-	@kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-grafana 3000:80 >/dev/null 2>&1 & echo $$! > .grafana.pid
-	@echo "==> Done! All 3 UIs are accessible via Tailscale."
+	@./scripts/forward-all.sh
 
 stop-forward: ## Stop background port-forwarding
 	@pkill -f "kubectl port-forward" 2>/dev/null || true
@@ -155,52 +120,34 @@ stop-forward: ## Stop background port-forwarding
 
 argocd-pass: ## Retrieve initial admin password for Argo CD UI
 	@echo "==> Argo CD Initial Admin Password:"
-	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d || echo "Initial secret deleted. Use custom patched password or check argocd-secret."
+	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d || echo "Initial secret deleted. Use custom patched password or check argocd-secret." ; echo""
 
 hard-reset: clean all ## Deep clean cluster and rebuild stack fresh
 
-test-alert: ## Test target to simulate an HTTP 500 error for Pushover alerts
-	@echo "==> Deploying error target (HTTP 500)..."
-	@printf '%s\n' \
-		'apiVersion: apps/v1' \
-		'kind: Deployment' \
-		'metadata:' \
-		'  name: httpbin-error' \
-		'  namespace: default' \
-		'spec:' \
-		'  replicas: 1' \
-		'  selector:' \
-		'    matchLabels:' \
-		'      app: httpbin-error' \
-		'  template:' \
-		'    metadata:' \
-		'      labels:' \
-		'        app: httpbin-error' \
-		'    spec:' \
-		'      containers:' \
-		'        - name: httpbin' \
-		'          image: mccutchen/go-httpbin:latest' \
-		'          ports:' \
-		'            - containerPort: 8080' \
-		'---' \
-		'apiVersion: v1' \
-		'kind: Service' \
-		'metadata:' \
-		'  name: httpbin-error' \
-		'  namespace: default' \
-		'  labels:' \
-		'    probe: "true"' \
-		'  annotations:' \
-		'    probe/path: "/status/500"' \
-		'spec:' \
-		'  ports:' \
-		'    - port: 80' \
-		'      targetPort: 8080' \
-		'      name: http' \
-		'  selector:' \
-		'    app: httpbin-error' | kubectl apply -f -
+test-targets-enable: ## Scale up test targets to simulate traffic and latency
+	@echo "Enabling test targets (httpbin-slow, httpbin)..."
+	kubectl scale deployment httpbin-slow --replicas=1 -n default
+	kubectl scale deployment httpbin --replicas=1 -n default
 
-test-alert-clean: ## Cleanup target for the error simulation
-	@echo "==> Cleaning up error target..."
-	@kubectl delete deployment httpbin-error --ignore-not-found
-	@kubectl delete service httpbin-error --ignore-not-found
+test-targets-disable: ## Scale down test targets to 0 replicas (clean baseline)
+	@echo "Disabling test targets to avoid resource usage..."
+	kubectl scale deployment httpbin-slow --replicas=0 -n default
+	kubectl scale deployment httpbin --replicas=0 -n default
+
+trigger-slow-alert: test-targets-enable ## Scale up slow endpoint to trigger HighLatency alert
+	@echo "httpbin-slow enabled. HighLatency alert should fire within ~2 minutes."
+
+test-alert-error: ## Simulate High Error Rate (HTTP 500)
+	@./scripts/alerts/trigger-error.sh
+
+test-alert-latency: ## Simulate High Latency (/delay/2)
+	@./scripts/alerts/trigger-latency.sh
+
+test-alert-traffic: ## Simulate Traffic Collapse (scale to 0)
+	@./scripts/alerts/trigger-traffic.sh
+
+test-alert-saturation: ## Simulate Worker Capacity Saturation (WORKERS=2)
+	@./scripts/alerts/trigger-saturation.sh
+
+test-alert-clean: test-targets-disable ## Clean up all simulated alert targets and scale replicas to 0
+	@./scripts/alerts/cleanup-all.sh

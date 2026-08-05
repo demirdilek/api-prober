@@ -1,3 +1,4 @@
+{{- if .Values.httpbin.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,7 +6,7 @@ metadata:
   labels:
     app: httpbin
 spec:
-  replicas: 1
+  replicas: {{ .Values.httpbin.replicaCount | default 1 }}
   selector:
     matchLabels:
       app: httpbin
@@ -43,20 +44,4 @@ spec:
       targetPort: 8080
   selector:
     app: httpbin
----
-# 2. Slow Endpoint (High Latency)
-apiVersion: v1
-kind: Service
-metadata:
-  name: httpbin-slow
-  labels:
-    app: httpbin
-    probe: "true"
-  annotations:
-    probe/path: "/delay/1"
-spec:
-  ports:
-    - port: 80
-      targetPort: 8080
-  selector:
-    app: httpbin
+{{- end }}

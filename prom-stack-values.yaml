@@ -141,3 +141,19 @@ prometheus:
                   summary: "TLS/SSL Handshake Failed"
                   description: "kube-prober encountered a TLS handshake error when connecting to {{ $labels.instance }}."
                   hint: "Check certificate expiration and issuer trust chain via 'openssl s_client -connect {{ $labels.instance }}:443'."
+# ------------------------------------------------------------------------------
+# Grafana Configuration (Default Home Dashboard & Provisioning)
+# ------------------------------------------------------------------------------
+grafana:
+  # Sets the default home dashboard displayed upon opening the Grafana UI
+  grafana.ini:
+    dashboards:
+      default_home_dashboard_path: /tmp/dashboards/kube-prober-dashboard.json
+
+  # Enables sidecar auto-discovery for Grafana dashboards defined via ConfigMaps
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL

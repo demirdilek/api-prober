@@ -21,7 +21,18 @@ resources:
     cpu: 10m
     memory: 64Mi
 
+# Eigene Werte für dein kube-prober Chart:
 dashboards:
   enabled: true
   label: grafana_dashboard
   labelValue: "1"
+
+# Grafana-Startseite festlegen (über das Grafana-Subchart):
+grafana:
+  grafana.ini:
+    dashboards:
+      default_home_dashboard_path: /tmp/dashboards/kube_prober_dashboard.json
+
+# values.yaml (Default / Dev)
+httpbin:
+  enabled: true

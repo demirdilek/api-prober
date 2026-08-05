@@ -1,0 +1,13 @@
+# ==============================================================================
+# Production Overrides
+# ==============================================================================
+
+# Disable all mock/fault-injection targets
+httpbin:
+  enabled: false
+
+# Production-grade replica counts for kube-prober engine
+replicaCount: 2
+
+# Override settings for real targets (if applicable)
+# ...
