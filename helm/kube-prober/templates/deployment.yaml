@@ -3,7 +3,9 @@ kind: Deployment
 metadata:
   name: {{ .Release.Name }}
 spec:
+  {{- if not .Values.hpa.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       app: {{ .Release.Name }}
@@ -16,6 +18,15 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534 # nobody user
+      {{- if .Values.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: {{ .Values.topologySpreadConstraints.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              app: {{ .Release.Name }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -24,6 +35,8 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
           ports:
             - containerPort: 8080
           livenessProbe:

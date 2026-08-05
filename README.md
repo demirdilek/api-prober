@@ -28,10 +28,16 @@
 - **Dynamic Alertmanager Routing:** Clean, non-empty alert notifications dynamically formatted for both Slack ChatOps and high-priority Pushover mobile push notifications.
 - **GitOps Continuous Delivery:** Fully automated deployment, sync, and self-healing managed declaratively via Argo CD.
 - **Declarative Telemetry Stack:** Pre-configured Prometheus monitoring, Grafana sidecars, and Alertmanager routing via `prom-stack-values.yaml`.
-- **Graceful Shutdown:** Listens for termination signals (`SIGINT`, `SIGTERM`) to cleanly shut down without dropping in-flight probes.
 - **Multi-Channel Alert Routing:** Dynamic Alertmanager routing featuring dual-channel notification delivery:
   - **Slack:** Full audit trail and ChatOps visibility for all alert states (`warning`, `critical`, `RESOLVED`).
   - **Pushover:** High-priority mobile push notifications (bypassing hardware silent switches via Priority 1) for `critical` incidents.
+- **Production-Grade High Availability (HA):** Built-in resilience features designed for zero-downtime maintenance and load surges:
+  - **PodDisruptionBudget (PDB):** Guarantees minimum pod availability during voluntary node drains and cluster maintenance.
+  - **HorizontalPodAutoscaler (HPA):** Dynamically scales replica capacity based on CPU and memory utilization thresholds.
+  - **Topology Spread Constraints:** Prevents single-point-of-failure scenarios by evenly distributing pods across worker nodes and availability zones.
+- **Application Health & Graceful Shutdown:** Native Kubernetes lifecycle integration for maximum operational safety:
+  - **Health & Readiness Probes:** Exposes `/healthz` (Liveness) and `/readyz` (Readiness) endpoints to prevent routing traffic to unready pods and automatically recover from deadlocks.
+  - **Graceful Teardown:** Captures `SIGINT` and `SIGTERM` OS signals to shut down the HTTP server cleanly and flush all in-flight worker probes without telemetry loss.
 
 ---
 
@@ -50,26 +56,43 @@
 The `kube-prober` microservice acts as the central observability engine. Using a Kubernetes Informer, it streams target changes directly from the API server into a local, thread-safe memory registry before executing HTTP/DNS probes and exporting 4 Golden Signals telemetry.
 
 ```text
+                                                  +--------------------+
+                                                  | Cluster Autoscaler |
+                                                  +---------+----------+
+                                                            |
 [ K8s Control Plane ] --(EndpointSlice Watch Stream)--> [ kube-prober Informer ]
-                                                                 |
-                                                    (Thread-Safe Local Registry)
-                                                                 |
-                                                    (Concurrent HTTP/DNS Probes)
-                                                                 v
-                                                        [ Target Services ]
-                                                                 |
-                                                        (Prometheus Metrics)
-                                                                 v
-                                                           [ Prometheus ]
-                                                                 |
-                                                            (Alert Rules)
-                                                                 v
-                                                           [ Alertmanager ]
-                                                                 |
-                                                      (Webhooks / Slack / Push)
-                                                                 v
-                                                           [ SRE On-Call ]
+   |                                                        |
+   +--(HPA / PDB Supervision)-----------------> (Thread-Safe Local Registry)
+                                                            |
+                                               (Concurrent HTTP/DNS Probes)
+                                                            v
+                                                   [ Target Services ]
+                                                            |
+                                                   (Prometheus Metrics)
+                                                            v
+                                                      [ Prometheus ]
+                                                            |
+                                                       (Alert Rules)
+                                                            v
+                                                      [ Alertmanager ]
+                                                            |
+                                                 (Webhooks / Slack / Push)
+                                                            v
+                                                      [ SRE On-Call ]
 ```
+
+---
+
+## 🛡️ High Availability & Resilience Architecture
+
+`kube-prober` follows SRE production-readiness guidelines across 4 core resilience pillars:
+
+| Resilience Pillar | Target Risk | Mechanism / Implementation |
+| :--- | :--- | :--- |
+| **1. Planned Maintenance** | Outages during node upgrades / drains | **PodDisruptionBudget (PDB):** Prevents evictions if available replicas fall below `minAvailable` threshold. |
+| **2. Dynamic Traffic Surges** | Resource exhaustion and high latency | **HorizontalPodAutoscaler (HPA):** Auto-scales prober replicas from 2 to 10 instances based on CPU/Memory load. |
+| **3. Hardware / Node Failures** | Single Point of Failure (SPOF) on node level | **TopologySpreadConstraints:** Forces Kubernetes scheduler to evenly distribute pods across distinct physical nodes (`maxSkew: 1`). |
+| **4. Application Health** | Deadlocks, premature traffic, data loss | **Probes & Graceful Shutdown:** Native `/healthz` & `/readyz` probes coupled with Go `SIGTERM` context signal cancellation. |
 
 ---
 

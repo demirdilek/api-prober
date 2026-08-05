@@ -21,6 +21,25 @@ resources:
     cpu: 10m
     memory: 64Mi
 
+# PodDisruptionBudget configuration
+pdb:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# HorizontalPodAutoscaler configuration
+hpa:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
 # Mock/Fault-injection target (dev default)
 httpbin:
   enabled: true
+
+# TopologySpreadConstraints configuration
+topologySpreadConstraints:
+  enabled: true
+  whenUnsatisfiable: ScheduleAnyway

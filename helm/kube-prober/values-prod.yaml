@@ -9,5 +9,17 @@ httpbin:
 # Production-grade replica counts for kube-prober engine
 replicaCount: 2
 
-# Override settings for real targets (if applicable)
-# ...
+# High Availability (HA) configurations
+pdb:
+  enabled: true
+  minAvailable: 1
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 75
+
+topologySpreadConstraints:
+  enabled: true
+  whenUnsatisfiable: DoNotSchedule
