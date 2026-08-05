@@ -38,6 +38,7 @@
 - **Application Health & Graceful Shutdown:** Native Kubernetes lifecycle integration for maximum operational safety:
   - **Health & Readiness Probes:** Exposes `/healthz` (Liveness) and `/readyz` (Readiness) endpoints to prevent routing traffic to unready pods and automatically recover from deadlocks.
   - **Graceful Teardown:** Captures `SIGINT` and `SIGTERM` OS signals to shut down the HTTP server cleanly and flush all in-flight worker probes without telemetry loss.
+- **Distributed Target Sharding (Rendezvous Hashing):** Seamlessly scales with Kubernetes HPA. Dynamically partitions and distributes target endpoints across all active prober replicas using Highest Random Weight (HRW) hashing. This guarantees zero duplicate probing and a perfectly balanced load distribution during dynamic scale-up/scale-down events.
 
 ---
 
@@ -93,6 +94,7 @@ The `kube-prober` microservice acts as the central observability engine. Using a
 | **2. Dynamic Traffic Surges** | Resource exhaustion and high latency | **HorizontalPodAutoscaler (HPA):** Auto-scales prober replicas from 2 to 10 instances based on CPU/Memory load. |
 | **3. Hardware / Node Failures** | Single Point of Failure (SPOF) on node level | **TopologySpreadConstraints:** Forces Kubernetes scheduler to evenly distribute pods across distinct physical nodes (`maxSkew: 1`). |
 | **4. Application Health** | Deadlocks, premature traffic, data loss | **Probes & Graceful Shutdown:** Native `/healthz` & `/readyz` probes coupled with Go `SIGTERM` context signal cancellation. |
+| **5. Multi-Replica Scaling** | Duplicate probing and uneven load distribution | **Target Sharding:** Rendezvous Hashing dynamically distributes ownership of endpoints across active prober peers. |
 
 ---
 

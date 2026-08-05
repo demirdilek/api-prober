@@ -2,13 +2,51 @@ package prober
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
-	"slices"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestRegistry_ShardingRendezvousHashing(t *testing.T) {
+	registry := NewRegistry()
+
+	// 1. Simulate a cluster topology with 3 prober replicas
+	podIPs := []string{"10.244.0.100", "10.244.0.101", "10.244.0.102"}
+	selfIP := "10.244.0.100"
+
+	// Configure the registry with the mocked HPA topology
+	registry.SetSelfIP(selfIP)
+	registry.UpdatePeers(podIPs)
+
+	// 2. Define a list of discovered target URLs
+	targets := []string{
+		"http://10.244.0.1:8080/healthz",
+		"http://10.244.0.2:8080/healthz",
+		"http://10.244.0.3:8080/healthz",
+		"http://10.244.0.4:8080/healthz",
+		"http://10.244.0.5:8080/healthz",
+		"http://10.244.0.6:8080/healthz",
+		"http://10.244.0.7:8080/healthz",
+		"http://10.244.0.8:8080/healthz",
+	}
+
+	// 3. Count how many targets are assigned to THIS specific pod
+	assignedToSelf := 0
+	for _, target := range targets {
+		if registry.ShouldProcessTarget(target) {
+			assignedToSelf++
+		}
+	}
+
+	// 4. Verify that not all targets are assigned to a single pod (sharding is active)
+	// With 8 targets and 3 pods, it is statistically highly probable to get a subset.
+	if assignedToSelf == 0 || assignedToSelf == len(targets) {
+		t.Errorf("expected distributed targets, but got %d assigned to self out of %d", assignedToSelf, len(targets))
+	}
+}
 
 func TestRegistry_UpdateAndRemoveEndpointSlice(t *testing.T) {
 	registry := NewRegistry()
@@ -48,7 +86,7 @@ func TestRegistry_UpdateAndRemoveEndpointSlice(t *testing.T) {
 		t.Fatalf("expected 2 events in channel, got %d", len(registry.Events))
 	}
 
-	// 2. Test Idempotency
+	// 2. Test Idempotency (adding the same targets again should not duplicate events)
 	registry.UpdateFromEndpointSlice(sliceWithPort, customPath)
 	if len(registry.Events) != 2 {
 		t.Errorf("expected 2 events total (0 new), got %d", len(registry.Events))
@@ -67,6 +105,7 @@ func TestRegistry_ConcurrencySafety(t *testing.T) {
 	registry := NewRegistry()
 	var wg sync.WaitGroup
 
+	// Simulate 20 concurrent discoveries
 	for i := 0; i < 20; i++ {
 		wg.Add(2)
 		ip := fmt.Sprintf("10.244.0.%d", i)

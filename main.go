@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -62,6 +65,16 @@ func main() {
 
 	clientset := initKubeClient()
 	registry := prober.NewRegistry()
+	
+	// 1. Retrieve and set own Pod IP injected by the Kubernetes Downward API
+	selfIP := os.Getenv("POD_IP")
+	if selfIP != "" {
+		registry.SetSelfIP(selfIP)
+	}
+
+	// 2. Start the peer watcher in the background to monitor HPA scaling events
+	go watchProberPeers(ctx, clientset, registry)
+
 	watcher := prober.NewTargetWatcher(clientset, registry)
 
 	go func() {
@@ -136,6 +149,56 @@ func initKubeClient() *kubernetes.Clientset {
 		os.Exit(1)
 	}
 	return clientset
+}
+
+// watchProberPeers observes the EndpointSlice of the kube-prober service itself.
+// It dynamically updates the registry with the active replica topology whenever the HPA scales.
+func watchProberPeers(ctx context.Context, clientset *kubernetes.Clientset, registry *prober.Registry) {
+	// Create an Informer for EndpointSlices in the deployment's namespace
+	factory := informers.NewSharedInformerFactoryWithOptions(
+		clientset,
+		10*time.Minute,
+		informers.WithNamespace("default"), // Adjust if deployed to a different namespace
+	)
+
+	informer := factory.Discovery().V1().EndpointSlices().Informer()
+
+	updatePeers := func() {
+		var peerIPs []string
+		
+		// Iterate over all discovered EndpointSlices in the cache
+		for _, obj := range informer.GetStore().List() {
+			slice, ok := obj.(*discoveryv1.EndpointSlice)
+			
+			// Filter specifically for the kube-prober service
+			if ok && slice.Labels["kubernetes.io/service-name"] == "kube-prober" {
+				for _, ep := range slice.Endpoints {
+					// Only consider pods that are marked as Ready
+					if ep.Conditions.Ready != nil && *ep.Conditions.Ready {
+						peerIPs = append(peerIPs, ep.Addresses...)
+					}
+				}
+			}
+		}
+		
+		// If we found active replicas, push the new topology to the registry for rebalancing
+		if len(peerIPs) > 0 {
+			registry.UpdatePeers(peerIPs)
+		}
+	}
+
+	// Register event handlers for add/update/delete events
+	_, _ = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj interface{}) { updatePeers() },
+		UpdateFunc: func(oldObj, newObj interface{}) { updatePeers() },
+		DeleteFunc: func(obj interface{}) { updatePeers() },
+	})
+
+	factory.Start(ctx.Done())
+	cache.WaitForCacheSync(ctx.Done(), informer.HasSynced)
+	
+	// Perform an initial sync to populate the registry at startup
+	updatePeers()
 }
 
 func getEnvAsInt(name string, defaultVal int) int {

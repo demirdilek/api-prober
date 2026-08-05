@@ -39,6 +39,11 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           ports:
             - containerPort: 8080
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           livenessProbe:
             httpGet:
               path: /healthz
