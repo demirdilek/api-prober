@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall helm-install-prod local-deploy hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-targets-enable test-targets-disable trigger-slow-alert test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-clean dev-enable dev-disable
+.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall helm-install-prod local-deploy local-deploy-clean hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-targets-enable test-targets-disable trigger-slow-alert test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-clean dev-enable dev-disable dev-status
 
 .DEFAULT_GOAL := help
 
@@ -86,11 +86,18 @@ dev-disable: ## Re-enable Argo CD Auto-Sync & Self-Healing
 	@echo "==> Re-enabling Argo CD Auto-Sync for $(ARGO_APP)..."
 	kubectl patch application $(ARGO_APP) -n $(ARGO_NAMESPACE) --type merge -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
 
+dev-status: ## Check if Argo CD Auto-Sync is currently enabled or disabled
+	@kubectl get application $(ARGO_APP) -n $(ARGO_NAMESPACE) -o jsonpath='{"Auto-Sync status: "}{.spec.syncPolicy.automated}{"\n"}'
+
 local-deploy: dev-enable lint test docker-build ## Fast local rebuild, import, pause GitOps, and rollout restart
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
 	kubectl rollout restart deployment $(RELEASE_NAME)
 
-all: k3d-up docker-build prometheus-install install-argocd apply-gitops helm-install ## Bootstrap entire local stack out-of-the-box
+local-deploy-clean: dev-enable clean-build ## Force clean build, import, and rollout restart without cache
+	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
+	kubectl rollout restart deployment $(RELEASE_NAME)
+
+all: k3d-up prometheus-install install-argocd apply-gitops helm-install ## Bootstrap entire local stack out-of-the-box (GitOps managed)
 	@echo "========================================================="
 	@echo " kube-prober stack is fully up and running out-of-the-box! "
 	@echo "========================================================="
