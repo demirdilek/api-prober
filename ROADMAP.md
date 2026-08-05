@@ -28,6 +28,8 @@ This document outlines the planned improvements, architectural refinements, and 
 
 ## Phase 3: Low Priority & Enterprise Expansion
 
+- [ ] **Distributed Target Sharding via Consistent Hashing**
+  - Implement a sharding mechanism (e.g., consistent hashing or modulo partitioning based on pod ordinal/IPs) across prober replicas when scaled via HPA to prevent duplicate probing and horizontally distribute workload.
 - [ ] **SLO / SLI & Error Budget Exporting**
   - Expose calculated multi-window burn rates directly as Prometheus metrics and ship pre-configured `PrometheusRule` manifests.
 - [ ] **Protocol Extension (gRPC / TCP / TLS)**
