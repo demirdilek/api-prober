@@ -17,11 +17,11 @@ if kubectl get deployment kube-prober >/dev/null 2>&1; then
   kubectl set env deployment/kube-prober WORKERS=50
 fi
 
-echo "==> Cleanup complete! Cluster restored to default state."
-
 # Set the port to normal state(:8080). It is for the trigger-traffic.sh script
 kubectl patch service httpbin-success -n default --type=merge -p '{"spec":{"ports":[{"port":80,"targetPort":80}]}}' 2>/dev/null || true
 
 # Delete artificial test deployments & services
 kubectl delete deployment httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 --ignore-not-found
 kubectl delete service httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 --ignore-not-found
+
+echo "==> Cleanup complete! Cluster restored to default state."
