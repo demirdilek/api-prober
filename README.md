@@ -39,6 +39,7 @@
   - **Health & Readiness Probes:** Exposes `/healthz` (Liveness) and `/readyz` (Readiness) endpoints to prevent routing traffic to unready pods and automatically recover from deadlocks.
   - **Graceful Teardown:** Captures `SIGINT` and `SIGTERM` OS signals to shut down the HTTP server cleanly and flush all in-flight worker probes without telemetry loss.
 - **Distributed Target Sharding (Rendezvous Hashing):** Seamlessly scales with Kubernetes HPA. Dynamically partitions and distributes target endpoints across all active prober replicas using Highest Random Weight (HRW) hashing. This guarantees zero duplicate probing and a perfectly balanced load distribution during dynamic scale-up/scale-down events.
+- **SLO / SLI & Multi-Window Burn Rate Alerting:** Calculates real-time Availability (99.9%) and Latency (99% < 500ms) SLIs via Prometheus Recording Rules. Emits proactive multi-window burn rate alerts (1h / 5m windows at 14.4x burn rate) to notify on-call engineers before error budgets are fully exhausted.
 
 ---
 
