@@ -1,6 +1,6 @@
 # ==============================================================================
-# Prometheus Stack Configuration Template
-# SRE 4 Golden Signals, Multi-Channel Alerting & Actionable Diagnostics
+# Prometheus Stack Local Configuration (Google SRE Best Practices)
+# Dynamic Multi-Target Support, Anti-Alert-Fatigue & Actionable Notifications
 # ==============================================================================
 
 alertmanager:
@@ -10,68 +10,79 @@ alertmanager:
       resolve_timeout: 5m
 
     # --------------------------------------------------------------------------
-    # Alert Routing Tree
+    # Routing Tree
     # --------------------------------------------------------------------------
     route:
       receiver: 'slack-notifications'
+      # Bündelt Alerts nach Name, Severity und Kategorie gegen Alert-Storms
       group_by: ['alertname', 'severity', 'category']
       group_wait: 10s
-      group_interval: 30s
+      group_interval: 5m
+      # Anti-Alert-Fatigue: Wiederholt unveränderte Dauer-Alerts erst nach 12h
       repeat_interval: 12h
+      
       routes:
-        # Suppress Prometheus internal watchdog alert
+        # Silenced K8s noisy internal watchdog
         - matchers:
             - alertname = Watchdog
           receiver: 'null'
 
-        # Route 1: Critical alerts trigger immediate Pushover notification (Priority 1)
-        # continue: true allows critical alerts to also flow into Slack
+        # Critical Alerts: Parallel Push-Benachrichtigung an Mobilgeräte
         - matchers:
             - severity = critical
           receiver: 'pushover-notifications'
           continue: true
 
-        # Route 2: All severity levels (info, warning, critical) flow into Slack
+        # Alle Standard-Alerts landen im zentralen Slack-Channel
         - matchers:
             - severity =~ "info|warning|critical"
           receiver: 'slack-notifications'
 
     # --------------------------------------------------------------------------
-    # Receivers & Notification Channels
+    # Receivers Configuration
     # --------------------------------------------------------------------------
     receivers:
       - name: 'null'
 
-      # Slack Receiver (Dynamic SRE Alert Template)
+      # ------------------------------------------------------------------------
+      # Slack Receiver
+      # ------------------------------------------------------------------------
       - name: 'slack-notifications'
         slack_configs:
-          - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+          - api_url: $SLACK_WEBHOOK_URL
             send_resolved: true
             title: '{{ if eq .Status "firing" }}:warning: [{{ .CommonLabels.severity | toUpper }}]{{ else }}:white_check_mark: [RESOLVED]{{ end }} {{ .CommonLabels.alertname }}'
             text: >-
               <!here>
-              *Time:* {{ (index .Alerts 0).StartsAt.Format "15:04:05 MST" }}
-              {{ if .CommonAnnotations.summary }}*Summary:* {{ .CommonAnnotations.summary }}{{ end }}
-              {{ if .CommonLabels.category }}*Error Category:* `{{ .CommonLabels.category }}`{{ end }}
-              {{ if .CommonAnnotations.description }}*Description:* {{ .CommonAnnotations.description }}{{ end }}
-              {{ if .CommonAnnotations.hint }}
+              {{ range .Alerts }}
+              *Time:* {{ .StartsAt.Format "15:04:05 MST" }}
+              {{ if .Annotations.summary }}*Summary:* {{ .Annotations.summary }}{{ end }}
+              {{ if $.CommonLabels.category }}*Category:* `{{ $.CommonLabels.category }}`{{ end }}
+              {{ if .Annotations.description }}*Description:* {{ .Annotations.description }}{{ end }}
+              {{ if .Annotations.hint }}
               *Actionable Diagnostic Hint:*
-              > {{ .CommonAnnotations.hint }}
+              > {{ .Annotations.hint }}
+              {{ end }}
+              ---
               {{ end }}
 
-      # Pushover Receiver (High-Priority Mobile Push)
+      # ------------------------------------------------------------------------
+      # Pushover Receiver
+      # ------------------------------------------------------------------------
       - name: 'pushover-notifications'
         pushover_configs:
-          - user_key: 'YOUR_PUSHOVER_USER_KEY'
-            token: 'YOUR_PUSHOVER_API_TOKEN'
-            priority: '1' # Priority 1 bypasses hardware silent switches on mobile devices
+          - user_key: $PUSHOVER_USER_KEY
+            token: $PUSHOVER_API_TOKEN
+            priority: '1' # Umgeht Stummschaltung bei kritischen Systemausfällen
             sound: 'alien'
             send_resolved: true
             title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ if .CommonLabels.category }}{{ .CommonLabels.category }}{{ else }}system{{ end }})'
             message: |-
-              Summary: {{ .CommonAnnotations.summary }}
-              
-              Hint: {{ .CommonAnnotations.hint }}
+              {{ range .Alerts }}
+              Summary: {{ .Annotations.summary }}
+              Hint: {{ .Annotations.hint }}
+              ---
+              {{ end }}
 
 # ------------------------------------------------------------------------------
 # Grafana Configuration (Default Home Dashboard & Provisioning)
@@ -89,3 +100,16 @@ grafana:
       label: grafana_dashboard
       labelValue: "1"
       searchNamespace: ALL
+
+# Disable control plane components for k3s/k3d compatibility
+#kubeControllerManager:
+#  enabled: false
+
+#kubeScheduler:
+#  enabled: false
+
+#kubeProxy:
+#  enabled: false
+
+#nodeExporter:
+#  enabled: false

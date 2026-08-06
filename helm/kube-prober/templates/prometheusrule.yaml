@@ -10,7 +10,12 @@ spec:
       rules:
         # 1. Latency: High p99 Latency
         - alert: HighLatency
-          expr: histogram_quantile(0.99, sum(rate(kube_prober_latency_seconds_bucket[5m])) by (le, target)) > 1.5
+          expr: |
+            (
+              histogram_quantile(0.99, sum(rate(kube_prober_latency_seconds_bucket{le!=""}[2m])) by (le, target)) > 1.5
+            ) and (
+              sum(rate(kube_prober_traffic_total[2m])) by (target) > 0.05
+            ) 
           for: 1m
           labels:
             severity: warning
@@ -18,19 +23,24 @@ spec:
             summary: '{{`High p99 latency on target {{ $labels.target }}`}}'
             hint: "Check CPU/Memory utilization, database connections, or network policies on upstream target."
 
-# 2. Traffic: Traffic Collapse / Total Outage
+        # 2. Traffic: Traffic Collapse / Total Outage
         - alert: TrafficCollapse
-          expr: (sum(rate(kube_prober_errors_total[2m])) by (target) == sum(rate(kube_prober_traffic_total[2m])) by (target)) and (sum(rate(kube_prober_traffic_total[2m])) by (target) > 0)
+          expr: |
+            (
+              sum(rate(kube_prober_errors_total[2m])) by (target) == sum(rate(kube_prober_traffic_total[2m])) by (target)
+            ) and (
+              sum(rate(kube_prober_traffic_total[2m])) by (target) > 0
+            )
           for: 1m
           labels:
             severity: critical
           annotations:
             summary: '{{`Traffic collapse / total outage on target {{ $labels.target }}`}}'
             hint: "Check if prober workers are failing to reach the endpoint or if the target service port is misconfigured."
-            
+
         # 3. Errors: High failure rate
         - alert: HighErrorRate
-          expr: sum(increase(kube_prober_errors_total[2m])) by (target) > 0
+          expr: sum(increase(kube_prober_errors_total[2m])) by (target) > 0.01
           for: 1m
           labels:
             severity: critical
@@ -40,10 +50,71 @@ spec:
 
         # 4. Saturation: Worker Capacity Reached
         - alert: MaxWorkersReached
-          expr: (sum(kube_prober_saturation_active_workers) / max(kube_prober_saturation_max_workers)) >= 0.9
+          expr: |
+            (
+              sum(kube_prober_saturation_active_workers) / clamp_min(max(kube_prober_saturation_max_workers), 1)
+            ) >= 0.9
           for: 1m
           labels:
             severity: warning
           annotations:
             summary: "Prober worker capacity saturated (>= 90% of max workers utilized)"
             hint: "Increase WORKERS environment variable or adjust PROBE_INTERVAL_SECONDS to reduce worker queue pressure."
+
+    - name: kube-prober-slo-recording-rules
+      rules:
+        # Availability: Error ratio (1 - success rate)
+        - record: target:kube_prober_error_ratio:rate5m
+          expr: |
+            sum by (target) (rate(kube_prober_errors_total[5m])) 
+            / 
+            clamp_min(sum by (target) (rate(kube_prober_traffic_total[5m])), 0.001)
+
+        - record: target:kube_prober_error_ratio:rate1h
+          expr: |
+            sum by (target) (rate(kube_prober_errors_total[1h])) 
+            / 
+            clamp_min(sum by (target) (rate(kube_prober_traffic_total[1h])), 0.001)
+
+        # Latency: Ratio of requests slower than 500ms
+        - record: target:kube_prober_latency_ratio:rate5m
+          expr: |
+            1 - (
+              sum by (target) (rate(kube_prober_latency_seconds_bucket{le="0.5"}[5m])) 
+              / 
+              clamp_min(sum by (target) (rate(kube_prober_latency_seconds_count[5m])), 0.001)
+            )
+
+        - record: target:kube_prober_latency_ratio:rate1h
+          expr: |
+            1 - (
+              sum by (target) (rate(kube_prober_latency_seconds_bucket{le="0.5"}[1h])) 
+              / 
+              clamp_min(sum by (target) (rate(kube_prober_latency_seconds_count[1h])), 0.001)
+            )
+
+    - name: kube-prober-slo-alerts
+      rules:
+        # SLO: 99.9% Availability (Error Budget: 0.001) -> 14.4x burn rate over 1h
+        - alert: AvailabilityBurnRateHigh
+          expr: |
+            target:kube_prober_error_ratio:rate1h > (0.001 * 14.4)
+            and
+            target:kube_prober_error_ratio:rate5m > (0.001 * 14.4)
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{`High availability error budget burn rate on {{ $labels.target }}`}}'
+            hint: "Check upstream targets for hard failures."
+
+        # SLO: 99% Latency < 500ms (Error Budget: 0.01) -> 14.4x burn rate over 1h
+        - alert: LatencyBurnRateHigh
+          expr: |
+            target:kube_prober_latency_ratio:rate1h > (0.01 * 14.4)
+            and
+            target:kube_prober_latency_ratio:rate5m > (0.01 * 14.4)
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{`High latency error budget burn rate on {{ $labels.target }}`}}'
+            hint: "Target is slow. Check resource saturation."

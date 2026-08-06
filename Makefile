@@ -91,10 +91,12 @@ dev-status: ## Check if Argo CD Auto-Sync is currently enabled or disabled
 
 local-deploy: dev-enable lint test docker-build ## Fast local rebuild, import, pause GitOps, and rollout restart
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
+	helm template $(RELEASE_NAME) $(CHART_DIR) | kubectl apply -f -
 	kubectl rollout restart deployment $(RELEASE_NAME)
 
 local-deploy-clean: dev-enable clean-build ## Force clean build, import, and rollout restart without cache
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
+	helm template $(RELEASE_NAME) $(CHART_DIR) | kubectl apply -f -
 	kubectl rollout restart deployment $(RELEASE_NAME)
 
 all: k3d-up prometheus-install install-argocd apply-gitops helm-install ## Bootstrap entire local stack out-of-the-box (GitOps managed)
@@ -103,7 +105,7 @@ all: k3d-up prometheus-install install-argocd apply-gitops helm-install ## Boots
 	@echo "========================================================="
 
 helm-upgrade: ## Upgrade existing kube-prober Helm release
-	helm upgrade $(RELEASE_NAME) $(CHART_DIR)
+	helm template $(RELEASE_NAME) $(CHART_DIR) | kubectl apply -f -
 
 helm-uninstall: ## Remove kube-prober Helm release
 	helm uninstall $(RELEASE_NAME) || true
@@ -156,5 +158,5 @@ test-alert-traffic: ## Simulate Traffic Collapse (scale to 0)
 test-alert-saturation: ## Simulate Worker Capacity Saturation (WORKERS=2)
 	@./scripts/alerts/trigger-saturation.sh
 
-test-alert-clean: test-targets-disable ## Clean up all simulated alert targets and scale replicas to 0
+test-alert-clean: ## Clean up all simulated alert targets and reset prober metrics
 	@./scripts/alerts/cleanup-all.sh
