@@ -42,13 +42,16 @@ func TestKubeWatcher_InformerEvents_DynamicPath(t *testing.T) {
 	endpointSliceInformer := informerFactory.Discovery().V1().EndpointSlices()
 
 	_, err = endpointSliceInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		// In TestKubeWatcher_InformerEvents_DynamicPath:
 		AddFunc: func(obj interface{}) {
 			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
-				path := watcher.getProbePath(ctx, slice)
-				registry.UpdateFromEndpointSlice(slice, path)
+				// Parse both scheme and path to satisfy the new UpdateFromEndpointSlice signature
+				scheme, path := watcher.getProbeSchemeAndPath(ctx, slice)
+				registry.UpdateFromEndpointSlice(slice, scheme, path)
 			}
 		},
 	})
+
 	if err != nil {
 		t.Fatalf("failed to add event handler to informer: %v", err)
 	}

@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall helm-install-prod local-deploy local-deploy-clean hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-targets-enable test-targets-disable trigger-slow-alert test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-clean dev-enable dev-disable dev-status
+.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall helm-install-prod local-deploy local-deploy-clean hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-targets-enable test-targets-disable trigger-slow-alert test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-tcp test-alert-clean dev-enable dev-disable dev-status
 
 .DEFAULT_GOAL := help
 
@@ -91,12 +91,12 @@ dev-status: ## Check if Argo CD Auto-Sync is currently enabled or disabled
 
 local-deploy: dev-enable lint test docker-build ## Fast local rebuild, import, pause GitOps, and rollout restart
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
-	helm template $(RELEASE_NAME) $(CHART_DIR) | kubectl apply -f -
+	helm template $(RELEASE_NAME) $(CHART_DIR) --set image.tag=$(IMAGE_TAG) --set image.pullPolicy=IfNotPresent | kubectl apply -f -
 	kubectl rollout restart deployment $(RELEASE_NAME)
 
 local-deploy-clean: dev-enable clean-build ## Force clean build, import, and rollout restart without cache
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
-	helm template $(RELEASE_NAME) $(CHART_DIR) | kubectl apply -f -
+	helm template $(RELEASE_NAME) $(CHART_DIR) --set image.tag=$(IMAGE_TAG) --set image.pullPolicy=IfNotPresent | kubectl apply -f -
 	kubectl rollout restart deployment $(RELEASE_NAME)
 
 all: k3d-up prometheus-install install-argocd apply-gitops helm-install ## Bootstrap entire local stack out-of-the-box (GitOps managed)
@@ -157,6 +157,9 @@ test-alert-traffic: ## Simulate Traffic Collapse (scale to 0)
 
 test-alert-saturation: ## Simulate Worker Capacity Saturation (WORKERS=2)
 	@./scripts/alerts/trigger-saturation.sh
+
+test-alert-tcp: ## Simulate Raw TCP Probing
+	@./scripts/alerts/trigger-tcp.sh
 
 test-alert-clean: ## Clean up all simulated alert targets and reset prober metrics
 	@./scripts/alerts/cleanup-all.sh

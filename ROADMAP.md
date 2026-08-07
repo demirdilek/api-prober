@@ -32,8 +32,13 @@ This document outlines the planned improvements, architectural refinements, and 
   - Implement a sharding mechanism (e.g., consistent hashing or modulo partitioning based on pod ordinal/IPs) across prober replicas when scaled via HPA to prevent duplicate probing and horizontally distribute workload.
 - [X] **SLO / SLI & Error Budget Exporting**
   - Expose calculated multi-window burn rates directly as Prometheus metrics and ship pre-configured `PrometheusRule` manifests.
-- [ ] **Protocol Extension (gRPC / TCP / TLS)**
+- [ ] **Protocol Extension (TCP / TLS / gRPC / DNS)**
   - Extend `prober.Dispatcher` with additional protocol handlers (e.g., gRPC Health Checking, TCP banner checks, TLS certificate expiry tracking).
+- [ ] **Core SRE Protocols for Probing & Monitoring**
+  - **TCP:** Layer 4 connectivity & banner checks for databases/caches.
+  - **TLS / SSL:** Certificate expiry tracking and handshake validation.
+  - **gRPC:** Internal microservices & control plane (`grpc.health.v1.Health`).
+  - **DNS:** Resolution time and correctness for critical service lookups.
 - [ ] **Chaos Engineering Test Suites**
   - Define Chaos Mesh or LitmusChaos scenarios to validate telemetry accuracy during simulated network latency, packet loss, and pod eviction events.
 - [ ] **v1.2.0 — Multi-Zone Vantage Point Probing & Follow-the-Sun Alerting:**

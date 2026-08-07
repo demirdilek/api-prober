@@ -6,6 +6,8 @@ echo "==> Cleaning up all simulated alert targets & restoring defaults..."
 # 1. Alle künstlichen Test-Deployments löschen
 kubectl delete deployment httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 --ignore-not-found
 kubectl delete service httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 --ignore-not-found
+kubectl delete deployment httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 tcp-test --ignore-not-found
+kubectl delete service httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 tcp-test --ignore-not-found
 
 # 2. Basis-Service Port wiederherstellen (Port 80 -> 8080)
 kubectl patch service httpbin-success -n default --type=merge -p '{"spec":{"ports":[{"port":80,"targetPort":8080}]}}' 2>/dev/null || true

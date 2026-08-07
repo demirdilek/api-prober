@@ -44,10 +44,15 @@ func main() {
 		},
 	}
 
+	// Register HTTP handlers
 	httpProber := prober.NewHTTPProber(httpClient)
 	dispatcher := prober.NewDispatcher()
 	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
 	dispatcher.Register("https", httpProber.ProbeHTTPTarget)
+
+	// Register TCP handler
+	tcpProber := prober.NewTCPProber()
+	dispatcher.Register("tcp", tcpProber.ProbeTCPTarget)
 
 	// Setup graceful shutdown context listening for SIGINT and SIGTERM OS signals
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

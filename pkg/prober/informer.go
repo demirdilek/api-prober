@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"time"
+	"log/slog"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,22 +27,42 @@ func NewKubeWatcher(clientset kubernetes.Interface, reg *Registry) *KubeWatcher 
 	}
 }
 
-func (w *KubeWatcher) getProbePath(ctx context.Context, slice *discoveryv1.EndpointSlice) string {
+// getProbeSchemeAndPath dynamically extracts both the protocol scheme (e.g., http, tcp)
+// and the HTTP path from the Kubernetes Service annotations.
+func (w *KubeWatcher) getProbeSchemeAndPath(ctx context.Context, slice *discoveryv1.EndpointSlice) (string, string) {
 	svcName := slice.Labels["kubernetes.io/service-name"]
+	
+	// Default to HTTP and /healthz if no specific annotations are found.
+	scheme := "http"
+	path := "/healthz"
+
 	if svcName == "" {
-		return "/healthz"
+		slog.Warn("EndpointSlice missing service-name label, falling back to defaults", "slice", slice.Name)
+		return scheme, path
 	}
 
+	// Fetch the Service object to read its custom annotations.
 	svc, err := w.clientset.CoreV1().Services(slice.Namespace).Get(ctx, svcName, metav1.GetOptions{})
 	if err != nil || svc.Annotations == nil {
-		return "/healthz"
+		slog.Warn("Failed to fetch Service to read annotations, falling back to defaults", "service", svcName, "error", err)
+		return scheme, path
 	}
 
-	if path, exists := svc.Annotations["probe/path"]; exists && path != "" {
-		return path
+	// 1. Check for a custom protocol scheme (e.g., "probe/scheme: tcp").
+	// This allows the Dispatcher to route the probe to the correct protocol handler.
+	if s, exists := svc.Annotations["probe/scheme"]; exists && s != "" {
+		slog.Warn("Service has no annotations", "service", svcName)
+		scheme = s
+	}
+	
+	// 2. Check for a custom path. 
+	// Note: We check if it exists, not if it's empty, because for protocols 
+	// like raw TCP, we actively want an empty path ("").
+	if p, exists := svc.Annotations["probe/path"]; exists {
+		path = p
 	}
 
-	return "/healthz"
+	return scheme, path
 }
 
 func (w *KubeWatcher) Start(ctx context.Context) error {
@@ -56,36 +77,46 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 		AddFunc: func(obj interface{}) {
 			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
 				if slice.Labels["probe"] == "true" {
-					path := w.getProbePath(ctx, slice)
-					w.registry.UpdateFromEndpointSlice(slice, path)
+					// Parse the dynamic scheme and path from the annotations
+					scheme, path := w.getProbeSchemeAndPath(ctx, slice)
+					// Pass the parsed scheme to the registry
+					w.registry.UpdateFromEndpointSlice(slice, scheme, path)
 				}
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			if newSlice, ok := newObj.(*discoveryv1.EndpointSlice); ok {
-				path := w.getProbePath(ctx, newSlice)
+				// Parse the dynamic scheme and path for updates
+				scheme, path := w.getProbeSchemeAndPath(ctx, newSlice)
 				if newSlice.Labels["probe"] == "true" {
-					w.registry.UpdateFromEndpointSlice(newSlice, path)
+					w.registry.UpdateFromEndpointSlice(newSlice, scheme, path)
 				} else {
-					w.registry.RemoveEndpointSlice(newSlice, path)
+					w.registry.RemoveEndpointSlice(newSlice, scheme, path)
 				}
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
+			// 1. Try to cast the object directly to an EndpointSlice
 			slice, ok := obj.(*discoveryv1.EndpointSlice)
+			
+			// 2. If it's not a direct slice, check if it's a tombstone (missed deletion event)
 			if !ok {
 				tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 				if !ok {
-					return
+					return // Not a slice and not a tombstone, safely ignore
 				}
+				
+				// Extract the actual slice from the tombstone
 				slice, ok = tombstone.Obj.(*discoveryv1.EndpointSlice)
 				if !ok {
 					return
 				}
 			}
+
+			// 3. Now that we safely have the 'slice', we can read its labels and clean up
 			if slice.Labels["probe"] == "true" {
-				path := w.getProbePath(ctx, slice)
-				w.registry.RemoveEndpointSlice(slice, path)
+				scheme, path := w.getProbeSchemeAndPath(ctx, slice)
+				w.registry.RemoveEndpointSlice(slice, scheme, path)
 			}
 		},
 	})

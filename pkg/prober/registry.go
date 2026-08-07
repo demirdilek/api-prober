@@ -104,14 +104,19 @@ func (r *Registry) rebalanceTargetsLocked() {
 }
 
 // UpdateFromEndpointSlice adds newly discovered targets from Kubernetes EndpointSlices.
-func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, path string) {
+// It now accepts a dynamic 'scheme' parameter to support TCP, TLS, gRPC, etc.
+func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, scheme, path string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if path == "" {
-		path = "/healthz"
+	// Provide a fallback scheme just in case an empty string slips through.
+	if scheme == "" {
+		scheme = "http"
 	}
-	if !strings.HasPrefix(path, "/") {
+	
+	// Ensure HTTP paths always start with a slash, but ignore completely empty paths 
+	// (which are valid for raw TCP/TLS connections).
+	if path != "" && !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
 
@@ -122,11 +127,12 @@ func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, pat
 
 	for _, ep := range slice.Endpoints {
 		for _, addr := range ep.Addresses {
-			targetURL := fmt.Sprintf("http://%s:%d%s", addr, portVal, path)
+			// Dynamically construct the target URL (e.g., "tcp://10.0.0.1:80" or "http://10.0.0.1:8080/healthz")
+			targetURL := fmt.Sprintf("%s://%s:%d%s", scheme, addr, portVal, path)
 
 			if _, exists := r.targets[targetURL]; !exists {
 				r.targets[targetURL] = slice.Namespace
-				// Only emit an 'Added' event if this pod is responsible for the target
+				// Emit an 'Added' event only if the Rendezvous Hashing algorithm assigns this target to this specific pod.
 				if r.ShouldProcessTarget(targetURL) {
 					r.Events <- TargetEvent{Target: targetURL, IsAdded: true}
 				}
@@ -136,14 +142,15 @@ func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, pat
 }
 
 // RemoveEndpointSlice removes deleted targets and stops their local schedulers.
-func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, path string) {
+// It uses the same dynamic scheme parameter to accurately reconstruct and find the target URL.
+func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, scheme, path string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if path == "" {
-		path = "/healthz"
+	if scheme == "" {
+		scheme = "http"
 	}
-	if !strings.HasPrefix(path, "/") {
+	if path != "" && !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
 
@@ -154,7 +161,8 @@ func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, path st
 
 	for _, ep := range slice.Endpoints {
 		for _, addr := range ep.Addresses {
-			targetURL := fmt.Sprintf("http://%s:%d%s", addr, portVal, path)
+			// Reconstruct the exact URL to safely delete it from the registry map.
+			targetURL := fmt.Sprintf("%s://%s:%d%s", scheme, addr, portVal, path)
 
 			if _, exists := r.targets[targetURL]; exists {
 				delete(r.targets, targetURL)
