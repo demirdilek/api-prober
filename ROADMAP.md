@@ -41,3 +41,18 @@ This document outlines the planned improvements, architectural refinements, and 
   - [ ] **Multi-Vantage Point Metrics:** Expand Prometheus metrics with `source_zone` labels (`kube_prober_latency_seconds{source_zone="..."}`) to measure global latency per region.
   - [ ] **Zonal Sharding Pools:** Filter peer lists in `watchProberPeers` by zone so each region runs its own Rendezvous Hashing ring over global targets.
   - [ ] **Follow-the-Sun Alert Routing:** Configure PrometheusRules and Alertmanager `active_time_intervals` (EU / US / APAC shifts) to route critical alerts dynamically to the active on-call team based on UTC business hours.
+
+---
+
+## Phase 4: Enterprise & SaaS Expansion (Commercial Product Roadmap)
+
+- [ ] **Multi-Tenancy & Tenant Isolation**
+  - Implement tenant-aware target grouping and metric isolation so multiple companies can securely share a single prober cluster without overlapping visibility.
+- [ ] **Dynamic API & Authentication Layer**
+  - Build a secure control-plane API (REST/gRPC) protected by API Keys or JWT tokens, allowing external clients to programmatically register, update, or delete probe targets without direct Kubernetes access.
+- [ ] **Dynamic Multi-Tenant Alert Routing**
+  - Extend the Alertmanager and webhook integration so individual tenants can configure and manage their own notification endpoints (Slack, PagerDuty, Webhooks) independently.
+- [ ] **Metering & Usage Tracking**
+  - Expose internal metrics for active probe counts, request volumes, and resource consumption to support billing, tiering, and usage tracking for a SaaS business model.
+- [ ] **Enterprise Secrets Management Integration**
+  - Native integration with HashiCorp Vault or external secret operators for automated, secure injection of tenant-specific webhook credentials and tokens.
