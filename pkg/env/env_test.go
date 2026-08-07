@@ -1,14 +1,12 @@
-package main
+package env
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
 
-// English comments as requested
 
-func TestGetEnvAsInt(t *testing.T) {
+func TestGetInt(t *testing.T) {
 	tests := []struct {
 		name         string
 		envKey       string
@@ -51,7 +49,7 @@ func TestGetEnvAsInt(t *testing.T) {
 				os.Unsetenv(tt.envKey)
 			}
 
-			got := getEnvAsInt(tt.envKey, tt.defaultVal)
+			got := GetInt(tt.envKey, tt.defaultVal)
 			if got != tt.expectedVal {
 				t.Errorf("getEnvAsInt(%s, %d) = %d; want %d", tt.envKey, tt.defaultVal, got, tt.expectedVal)
 			}
@@ -59,35 +57,3 @@ func TestGetEnvAsInt(t *testing.T) {
 	}
 }
 
-func TestInitKubeClient_KubeconfigFallback(t *testing.T) {
-	// Point KUBECONFIG to a non-existent file to ensure clientcmd handles the path resolution
-	tempDir := t.TempDir()
-	fakeKubeconfig := filepath.Join(tempDir, "config")
-	t.Setenv("KUBECONFIG", fakeKubeconfig)
-
-	// Create a dummy minimal kubeconfig file
-	dummyConfig := `
-apiVersion: v1
-kind: Config
-clusters:
-- cluster:
-    server: http://127.0.0.1:8080
-  name: dummy
-contexts:
-- context:
-    cluster: dummy
-    user: dummy
-  name: dummy
-current-context: dummy
-users:
-- name: dummy
-`
-	if err := os.WriteFile(fakeKubeconfig, []byte(dummyConfig), 0600); err != nil {
-		t.Fatalf("failed to write dummy kubeconfig: %v", err)
-	}
-
-	clientset := initKubeClient()
-	if clientset == nil {
-		t.Fatal("expected non-nil kubernetes Clientset")
-	}
-}

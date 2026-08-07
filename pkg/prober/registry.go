@@ -18,11 +18,11 @@ type TargetEvent struct {
 
 // Registry maintains the active probing targets and handles distributed sharding.
 type Registry struct {
-	mu            sync.RWMutex
-	targets       map[string]string
-	Events        chan TargetEvent
-	selfPodIP     string
-	clusterPodIPs []string
+	mu            sync.RWMutex // Protects targets and peer topology against race conditions during concurrent reads and writes
+	targets       map[string]string // Stores all known targets in the cluster
+	Events        chan TargetEvent // Channel emitting add/remove events for locally assigned targets
+	selfPodIP     string // The Pod-IP of the prober himself
+	clusterPodIPs []string // List of all active Prober Pod-IPs in the Cluster
 }
 
 // NewRegistry initializes a new thread-safe registry.
@@ -47,7 +47,7 @@ func (r *Registry) UpdatePeers(peers []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Sort IPs to guarantee an identical hash topology across all replicas
+	// Sort IPs to guarantee an identical and determistic hash topology across all replicas
 	sortedPeers := make([]string, len(peers))
 	copy(sortedPeers, peers)
 	sort.Strings(sortedPeers)
@@ -83,8 +83,8 @@ func (r *Registry) ShouldProcessTarget(target string) bool {
 
 // hashTargetAndPod generates a fast 64-bit FNV hash from the combined target URL and Pod IP.
 func hashTargetAndPod(target, podIP string) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(target + ":" + podIP))
+	h := fnv.New64a() // Initialize fast 64-bit FNV-1a non-cryptographic hasher
+	_, _ = h.Write([]byte(target + ":" + podIP)) // Hash the combined string (ignoring in-memory write errors)
 	return h.Sum64()
 }
 
@@ -176,4 +176,15 @@ func (r *Registry) GetTargets() []string {
 		}
 	}
 	return targets
+}
+
+// GetPeers returns a copy of the current sorted peer IPs for testing or debugging
+func (r *Registry) GetPeers() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	peersCopy := make([]string, len(r.clusterPodIPs))
+	copy(peersCopy, r.clusterPodIPs)
+
+	return peersCopy
 }

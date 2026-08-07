@@ -12,19 +12,21 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-type TargetWatcher struct {
-	clientset kubernetes.Interface
-	registry  *Registry
+// KubeWatcher observes K8s resources (EndpointSlices) to keep the target 
+// registry in sync and maintain the active replica topology for sharding.
+type KubeWatcher struct {
+    clientset kubernetes.Interface
+    registry  *Registry
 }
 
-func NewTargetWatcher(clientset kubernetes.Interface, reg *Registry) *TargetWatcher {
-	return &TargetWatcher{
+func NewKubeWatcher(clientset kubernetes.Interface, reg *Registry) *KubeWatcher {
+	return &KubeWatcher{
 		clientset: clientset,
 		registry:  reg,
 	}
 }
 
-func (w *TargetWatcher) getProbePath(ctx context.Context, slice *discoveryv1.EndpointSlice) string {
+func (w *KubeWatcher) getProbePath(ctx context.Context, slice *discoveryv1.EndpointSlice) string {
 	svcName := slice.Labels["kubernetes.io/service-name"]
 	if svcName == "" {
 		return "/healthz"
@@ -42,7 +44,7 @@ func (w *TargetWatcher) getProbePath(ctx context.Context, slice *discoveryv1.End
 	return "/healthz"
 }
 
-func (w *TargetWatcher) Start(ctx context.Context) error {
+func (w *KubeWatcher) Start(ctx context.Context) error {
 	factory := informers.NewSharedInformerFactoryWithOptions(
 		w.clientset,
 		10*time.Minute,
@@ -98,4 +100,47 @@ func (w *TargetWatcher) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// WatchPeers observes EndpointSlices of the prober deployment itself
+// to keep the active replica topology synced for Rendezvous Hashing.
+func (w *KubeWatcher) WatchPeers(ctx context.Context) {
+	factory := informers.NewSharedInformerFactoryWithOptions(
+		w.clientset,
+		10*time.Minute,
+		informers.WithNamespace("default"), // Adjust if deployed to a different namespace
+	)
+
+	informer := factory.Discovery().V1().EndpointSlices().Informer()
+
+	updatePeers := func() {
+		var peerIPs []string
+		
+		for _, obj := range informer.GetStore().List() {
+			slice, ok := obj.(*discoveryv1.EndpointSlice)
+			
+			if ok && slice.Labels["kubernetes.io/service-name"] == "kube-prober" {
+				for _, ep := range slice.Endpoints {
+					if ep.Conditions.Ready != nil && *ep.Conditions.Ready {
+						peerIPs = append(peerIPs, ep.Addresses...)
+					}
+				}
+			}
+		}
+		
+		if len(peerIPs) > 0 {
+			w.registry.UpdatePeers(peerIPs)
+		}
+	}
+
+	_, _ = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj interface{}) { updatePeers() },
+		UpdateFunc: func(oldObj, newObj interface{}) { updatePeers() },
+		DeleteFunc: func(obj interface{}) { updatePeers() },
+	})
+
+	factory.Start(ctx.Done())
+	cache.WaitForCacheSync(ctx.Done(), informer.HasSynced)
+	
+	updatePeers()
 }

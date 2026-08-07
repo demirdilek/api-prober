@@ -7,22 +7,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	discoveryv1 "k8s.io/api/discovery/v1"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/demirdilek/kube-prober/pkg/prober"
 	"github.com/demirdilek/kube-prober/pkg/server"
+	"github.com/demirdilek/kube-prober/pkg/env"
+	"github.com/demirdilek/kube-prober/pkg/kube"
+
 )
 
 func init() {
@@ -32,17 +27,19 @@ func init() {
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
-	numWorkers := getEnvAsInt("WORKERS", 50)
+	// Configure worker pool capacity and HTTP client options for heavy concurrent probing
+	numWorkers := env.GetInt("WORKERS", 50)
 	prober.MaxWorkersGauge.Set(float64(numWorkers))
-	jobQueueSize := getEnvAsInt("QUEUE_SIZE", 10000)
-	probeInterval := time.Duration(getEnvAsInt("PROBE_INTERVAL_SECONDS", 2)) * time.Second
-	httpTimeout := time.Duration(getEnvAsInt("HTTP_TIMEOUT_SECONDS", 5)) * time.Second
+	jobQueueSize := env.GetInt("QUEUE_SIZE", 10000)
+	probeInterval := time.Duration(env.GetInt("PROBE_INTERVAL_SECONDS", 2)) * time.Second
+	httpTimeout := time.Duration(env.GetInt("HTTP_TIMEOUT_SECONDS", 5)) * time.Second
 
+	// Pre-configure HTTP transport with aggressive connection pooling for high-throughput reuse
 	httpClient := &http.Client{
 		Timeout: httpTimeout,
 		Transport: &http.Transport{
-			MaxIdleConns:        getEnvAsInt("MAX_IDLE_CONNS", 1000),
-			MaxIdleConnsPerHost: getEnvAsInt("MAX_IDLE_CONNS_PER_HOST", 100),
+			MaxIdleConns:        env.GetInt("MAX_IDLE_CONNS", 1000),
+			MaxIdleConnsPerHost: env.GetInt("MAX_IDLE_CONNS_PER_HOST", 100),
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}
@@ -52,41 +49,46 @@ func main() {
 	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
 	dispatcher.Register("https", httpProber.ProbeHTTPTarget)
 
+	// Setup graceful shutdown context listening for SIGINT and SIGTERM OS signals
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	var wg sync.WaitGroup
 	jobs := make(chan prober.Job, jobQueueSize)
 
+	// Spawn worker pool goroutines to process incoming probe jobs concurrently
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go prober.WorkerPool(ctx, jobs, dispatcher, &wg)
 	}
 
-	clientset := initKubeClient()
+	clientset := kube.InitClient()
 	registry := prober.NewRegistry()
 	
-	// 1. Retrieve and set own Pod IP injected by the Kubernetes Downward API
+	// Retrieve local pod IP via Downward API for Rendezvous Hashing target ownership calculations
 	selfIP := os.Getenv("POD_IP")
 	if selfIP != "" {
 		registry.SetSelfIP(selfIP)
 	}
 
-	// 2. Start the peer watcher in the background to monitor HPA scaling events
-	go watchProberPeers(ctx, clientset, registry)
+	// Initialize the unified KubeWatcher for both peer topology and target discovery
+	watcher := prober.NewKubeWatcher(clientset, registry)
 
-	watcher := prober.NewTargetWatcher(clientset, registry)
+	// 1. Watch peer replicas dynamically to rebalance targets upon HPA scaling events
+	go watcher.WatchPeers(ctx)
 
-	go func() {
-		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("Informer watcher stopped", "error", err)
-		}
-	}()
+	// 2. Start the EndpointSlice informer in a background goroutine to stream target updates asynchronously
+    go func() {
+        if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+            slog.Error("Informer watcher stopped", "error", err)
+        }
+    }()
 
 	activeSchedulers := make(map[string]context.CancelFunc)
 	var schedMu sync.Mutex
 
-go func() {
+	// Event loop: process target assignments emitted by the sharding registry
+	go func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -95,6 +97,7 @@ go func() {
 				schedMu.Lock()
 				
 				if evt.IsAdded {
+					// Target assigned to this replica: start local periodic probe scheduler
 					if _, exists := activeSchedulers[evt.Target]; !exists {
 						slog.Info("New target discovered", "target", evt.Target)
 						schedCtx, schedCancel := context.WithCancel(ctx)
@@ -104,6 +107,7 @@ go func() {
 						go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &wg)
 					}
 					} else {
+							// Target revoked or deleted: cancel local scheduler and purge metrics
 							if cancelFunc, exists := activeSchedulers[evt.Target]; exists {
 							slog.Info("Target removed", "target", evt.Target)
 							cancelFunc()
@@ -116,99 +120,18 @@ go func() {
 		}
 	}()
 
+	// Start telemetry & health probe server (/metrics, /healthz, /readyz, /debug/pprof)
 	srv := server.New(":8080")
 	go srv.Start()
 
 	<-ctx.Done()
 	slog.Info("Shutting down cleanly...")
 
+	// Allow up to 5 seconds for active HTTP probes and goroutines to finish gracefully
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
 	_ = srv.Shutdown(shutdownCtx)
 	wg.Wait()
 	slog.Info("Goodbye.")
-}
-
-func initKubeClient() *kubernetes.Clientset {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		kubeconfig := os.Getenv("KUBECONFIG")
-		if kubeconfig == "" {
-			kubeconfig = filepath.Join(os.Getenv("HOME"), ".kube", "config")
-		}
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			slog.Error("Failed to build k8s config", "error", err)
-			os.Exit(1)
-		}
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		slog.Error("Failed to create k8s clientset", "error", err)
-		os.Exit(1)
-	}
-	return clientset
-}
-
-// watchProberPeers observes the EndpointSlice of the kube-prober service itself.
-// It dynamically updates the registry with the active replica topology whenever the HPA scales.
-func watchProberPeers(ctx context.Context, clientset *kubernetes.Clientset, registry *prober.Registry) {
-	// Create an Informer for EndpointSlices in the deployment's namespace
-	factory := informers.NewSharedInformerFactoryWithOptions(
-		clientset,
-		10*time.Minute,
-		informers.WithNamespace("default"), // Adjust if deployed to a different namespace
-	)
-
-	informer := factory.Discovery().V1().EndpointSlices().Informer()
-
-	updatePeers := func() {
-		var peerIPs []string
-		
-		// Iterate over all discovered EndpointSlices in the cache
-		for _, obj := range informer.GetStore().List() {
-			slice, ok := obj.(*discoveryv1.EndpointSlice)
-			
-			// Filter specifically for the kube-prober service
-			if ok && slice.Labels["kubernetes.io/service-name"] == "kube-prober" {
-				for _, ep := range slice.Endpoints {
-					// Only consider pods that are marked as Ready
-					if ep.Conditions.Ready != nil && *ep.Conditions.Ready {
-						peerIPs = append(peerIPs, ep.Addresses...)
-					}
-				}
-			}
-		}
-		
-		// If we found active replicas, push the new topology to the registry for rebalancing
-		if len(peerIPs) > 0 {
-			registry.UpdatePeers(peerIPs)
-		}
-	}
-
-	// Register event handlers for add/update/delete events
-	_, _ = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { updatePeers() },
-		UpdateFunc: func(oldObj, newObj interface{}) { updatePeers() },
-		DeleteFunc: func(obj interface{}) { updatePeers() },
-	})
-
-	factory.Start(ctx.Done())
-	cache.WaitForCacheSync(ctx.Done(), informer.HasSynced)
-	
-	// Perform an initial sync to populate the registry at startup
-	updatePeers()
-}
-
-func getEnvAsInt(name string, defaultVal int) int {
-	valStr := os.Getenv(name)
-	if valStr == "" {
-		return defaultVal;
-	}
-	val, err := strconv.Atoi(valStr)
-	if err != nil {
-		return defaultVal;
-	}
-	return val
 }

@@ -113,6 +113,8 @@ The `kube-prober` microservice acts as the central observability engine. Using a
 │       ├── dashboards/     # Auto-provisioned Grafana Dashboards
 │       └── templates/      # K8s Resources & Alerting Rules
 ├── pkg/
+│   ├── env/                # Environment variable parsing and utilities
+│   ├── kube/               # Kubernetes client initialization & fallback
 │   └── prober/             # Core HTTP Probing Engine, K8s EndpointSlice Informers & Metrics
 │   └── server/             # Health, Readiness, Pprof & Metrics HTTP Server
 ├── Dockerfile              # Multi-stage, Multi-arch Build File
