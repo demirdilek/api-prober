@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall helm-install-prod local-deploy local-deploy-clean hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-targets-enable test-targets-disable trigger-slow-alert test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-tcp test-alert-tls-expiry test-alert-tls-handshake test-alert-clean dev-enable dev-disable dev-status
+.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall helm-install-prod local-deploy local-deploy-clean hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass argocd-set-pass test-targets-enable test-targets-disable trigger-slow-alert test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-tcp test-alert-tls-expiry test-alert-tls-handshake test-alert-clean dev-enable dev-disable dev-status
 
 .DEFAULT_GOAL := help
 
@@ -130,6 +130,13 @@ stop-forward: ## Stop background port-forwarding
 argocd-pass: ## Retrieve initial admin password for Argo CD UI
 	@echo "==> Argo CD Initial Admin Password:"
 	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d || echo "Initial secret deleted. Use custom patched password or check argocd-secret." ; echo""
+
+argocd-set-pass: ## Set a custom Argo CD admin password
+	@MYPASS="admin1234"; \
+	echo "==> Updating Argo CD admin password..."; \
+	HASH=$$(docker run --rm quay.io/argoproj/argocd:latest argocd account bcrypt --password "$$MYPASS"); \
+	kubectl patch secret argocd-secret -n argocd -p "{\"stringData\": {\"admin.password\": \"$$HASH\", \"admin.passwordMtime\": \"$$(date -u +%FT%TZ)\"}}"; \
+	echo "==> Password successfully updated to: $$MYPASS"
 
 hard-reset: clean all ## Deep clean cluster and rebuild stack fresh
 
