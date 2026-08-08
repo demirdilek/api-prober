@@ -50,6 +50,10 @@ func main() {
 	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
 	dispatcher.Register("https", httpProber.ProbeHTTPTarget)
 
+	// Register TCP handlers
+	tcpProber := prober.NewTCPProber()
+	dispatcher.Register("tcp", tcpProber.ProbeTCPTarget)
+
 	// Configure TLS verification mode via environment variable
 	var tlsCfg *tls.Config
 	if os.Getenv("TLS_INSECURE_SKIP_VERIFY") == "true" {
@@ -57,6 +61,7 @@ func main() {
 		tlsCfg = &tls.Config{InsecureSkipVerify: true}
 	}
 
+	// Register TLS handlers
 	tlsProber := prober.NewTLSProber(tlsCfg)
 	dispatcher.Register("tls", tlsProber.ProbeTLSTarget)
 
