@@ -19,6 +19,7 @@ spec:
           for: 1m
           labels:
             severity: warning
+            app: kube-prober
           annotations:
             summary: '{{`High p99 latency on target {{ $labels.target }}`}}'
             hint: "Check CPU/Memory utilization, database connections, or network policies on upstream target."
@@ -34,6 +35,7 @@ spec:
           for: 1m
           labels:
             severity: critical
+            app: kube-prober
           annotations:
             summary: '{{`Traffic collapse / total outage on target {{ $labels.target }}`}}'
             hint: "Check if prober workers are failing to reach the endpoint or if the target service port is misconfigured."
@@ -44,6 +46,7 @@ spec:
           for: 1m
           labels:
             severity: critical
+            app: kube-prober
           annotations:
             summary: '{{`High error rate detected on target {{ $labels.target }}`}}'
             hint: "Target application is failing probes (4xx/5xx/timeout). Inspect pod logs via 'kubectl logs' or check service endpoints."
@@ -57,6 +60,7 @@ spec:
           for: 1m
           labels:
             severity: warning
+            app: kube-prober
           annotations:
             summary: "Prober worker capacity saturated (>= 90% of max workers utilized)"
             hint: "Increase WORKERS environment variable or adjust PROBE_INTERVAL_SECONDS to reduce worker queue pressure."
@@ -67,6 +71,7 @@ spec:
           for: 1m
           labels:
             severity: warning
+            app: kube-prober
           annotations:
             summary: '{{`TLS Certificate expiring soon on target {{ $labels.target }}`}}'
             hint: "Renew the TLS/SSL certificate or check cert-manager secret renewal status."
@@ -77,6 +82,7 @@ spec:
           for: 1m
           labels:
             severity: critical
+            app: kube-prober
           annotations:
             summary: '{{`TLS handshake failed on target {{ $labels.target }}`}}'
             hint: "Check TLS certificate validity, SAN domain coverage, or local CA trust store."
@@ -87,6 +93,7 @@ spec:
           for: 1m
           labels:
             severity: critical
+            app: kube-prober
           annotations:
             summary: '{{`TCP connection refused on target {{ $labels.target }}`}}'
             hint: "Target pod might be down, crash-looping, or rejecting connections on specified port."
@@ -133,6 +140,7 @@ spec:
             target:kube_prober_error_ratio:rate5m > (0.001 * 14.4)
           labels:
             severity: critical
+            app: kube-prober
           annotations:
             summary: '{{`High availability error budget burn rate on {{ $labels.target }}`}}'
             hint: "Check upstream targets for hard failures."
@@ -145,6 +153,7 @@ spec:
             target:kube_prober_latency_ratio:rate5m > (0.01 * 14.4)
           labels:
             severity: critical
+            app: kube-prober
           annotations:
             summary: '{{`High latency error budget burn rate on {{ $labels.target }}`}}'
             hint: "Target is slow. Check resource saturation."
