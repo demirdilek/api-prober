@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # 1. GitHub Actions (Automates updates for checkout, setup-helm, shellcheck, docker build/login, etc.)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # 2. Go Modules (Automates updates for go.mod dependencies)
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # 3. Dockerfile Base Images (Automates updates for Go Alpine base images)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # 4. Helm Chart Dependencies (Automates sub-chart updates under helm/kube-prober)
+  - package-ecosystem: "helm"
+    directory: "/helm/kube-prober"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
