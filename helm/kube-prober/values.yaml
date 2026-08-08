@@ -43,3 +43,6 @@ httpbin:
 topologySpreadConstraints:
   enabled: true
   whenUnsatisfiable: ScheduleAnyway
+
+env:
+  TLS_INSECURE_SKIP_VERIFY: "false" # Secure production default

@@ -46,23 +46,26 @@ func MapToCategory(err error, statusCode int) ErrorCategory {
 		if statusCode >= 400 {
 			return CategoryHTTP
 		}
-		return "" // Success, no error
+		return ""
 	}
 
-	// 1. Check for Context Timeout / Deadline Exceeded
 	if errors.Is(err, context.DeadlineExceeded) {
 		return CategoryTimeout
 	}
 
-	// 2. Check for TLS / Certificate errors
+	// 2. Enhanced TLS / Certificate error checking (unwraps custom CAs and SAN mismatches)
 	var certErr *x509.CertificateInvalidError
-	var unknownAuthErr *x509.UnknownAuthorityError
+	var unknownAuthErr x509.UnknownAuthorityError
+	var hostnameErr x509.HostnameError
 	var recErr tls.RecordHeaderError
-	if errors.As(err, &certErr) || errors.As(err, &unknownAuthErr) || errors.As(err, &recErr) {
+
+	if errors.As(err, &certErr) || 
+	   errors.As(err, &unknownAuthErr) || 
+	   errors.As(err, &hostnameErr) || 
+	   errors.As(err, &recErr) {
 		return CategoryTLS
 	}
 
-	// 3. Unwrap network-specific errors (DNS vs Connect vs Network Timeout)
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		return CategoryDNS

@@ -35,10 +35,15 @@ This document outlines the planned improvements, architectural refinements, and 
 - [ ] **Protocol Extension (TCP / TLS / gRPC / DNS)**
   - Extend `prober.Dispatcher` with additional protocol handlers (e.g., gRPC Health Checking, TCP banner checks, TLS certificate expiry tracking).
 - [ ] **Core SRE Protocols for Probing & Monitoring**
-  - **TCP:** Layer 4 connectivity & banner checks for databases/caches.
-  - **TLS / SSL:** Certificate expiry tracking and handshake validation.
-  - **gRPC:** Internal microservices & control plane (`grpc.health.v1.Health`).
-  - **DNS:** Resolution time and correctness for critical service lookups.
+  - [X] **TCP:** Layer 4 connectivity & banner checks for databases/caches.
+  - [X] **TLS / SSL:** Certificate expiry tracking and handshake validation.
+  - [] **gRPC:** Internal microservices & control plane (`grpc.health.v1.Health`).
+  - [] **DNS:** Resolution time and correctness for critical service lookups.
+- [ ] **SRE Dashboard & Observability Hardening**
+  - [x] Add 4 Golden Signals visualization panels.
+  - [ ] Add dedicated TLS Certificate Expiry tracking panel (stat/gauge).
+  - [ ] Add TCP Target Availability & Protocol Error Breakdown panels.
+  - [ ] Add SLO Error Budget Burn Rate panel based on recording rules.
 - [ ] **Chaos Engineering Test Suites**
   - Define Chaos Mesh or LitmusChaos scenarios to validate telemetry accuracy during simulated network latency, packet loss, and pod eviction events.
 - [ ] **v1.2.0 — Multi-Zone Vantage Point Probing & Follow-the-Sun Alerting:**

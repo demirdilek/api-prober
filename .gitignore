@@ -1,7 +1,7 @@
 # ==========================================
 # Go Binaries & Build Output
 # ==========================================
-# Root binary (mit / damit helm/kube-prober nicht blockiert wird)
+# Root binary (that helm/kube-prober doesn't block)
 /kube-prober
 bin/
 dist/
@@ -28,6 +28,7 @@ vendor/
 # ==========================================
 # Local Dev, Environment & Data
 # ==========================================
+cert/
 .env
 .env.local
 *.log
@@ -35,6 +36,8 @@ vendor/
 grafana-storage/
 prometheus-data/
 prom-stack-values.local.yaml
+tls.key
+tls.crt
 
 # ==========================================
 # Editors & IDEs

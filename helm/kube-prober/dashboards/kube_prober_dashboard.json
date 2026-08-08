@@ -66,6 +66,55 @@
       "fieldConfig": {
         "defaults": { "custom": { "drawStyle": "line" }, "unit": "percent" }
       }
+    },
+    {
+      "title": "TLS Certificate Expiry",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "kube_prober_tls_cert_expiry_days",
+          "legendFormat": "{{target}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "d",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 7 },
+              { "color": "green", "value": 30 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "TCP Target Availability",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "(sum(rate(kube_prober_traffic_total{target=~\"tcp://.*\"}[2m])) by (target) - sum(rate(kube_prober_errors_total{target=~\"tcp://.*\"}[2m])) by (target)) / sum(rate(kube_prober_traffic_total{target=~\"tcp://.*\"}[2m])) by (target) * 100",
+          "legendFormat": "{{target}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "100%",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 95 },
+              { "color": "green", "value": 99.9 }
+            ]
+          }
+        }
+      }
     }
   ],
   "refresh": "5s",

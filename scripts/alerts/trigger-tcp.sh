@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "==> [TCP] Deploying raw TCP target..."
+echo "==> [TCP] Deploying raw TCP target with intentional misconfiguration..."
 
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -34,14 +34,15 @@ metadata:
     probe: "true"
   annotations:
     probe/scheme: "tcp"
-    probe/path: "" # No path needed for raw TCP
+    probe/path: "" 
 spec:
   ports:
     - port: 80
-      targetPort: 80
+      # Intentionally pointing to a dead port to simulate a connection refused error
+      targetPort: 9999
       name: tcp
   selector:
     app: tcp-test
 EOF
 
-echo "==> Target tcp-test deployed. Prober should now verify Layer 4 connectivity."
+echo "==> Target tcp-test deployed. TCPConnectionRefused alert will trigger shortly."

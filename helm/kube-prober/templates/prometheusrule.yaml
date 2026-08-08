@@ -8,7 +8,7 @@ spec:
   groups:
     - name: kube-prober-golden-signals
       rules:
-        # 1. Latency: High p99 Latency
+        # Latency: High p99 Latency
         - alert: HighLatency
           expr: |
             (
@@ -23,7 +23,7 @@ spec:
             summary: '{{`High p99 latency on target {{ $labels.target }}`}}'
             hint: "Check CPU/Memory utilization, database connections, or network policies on upstream target."
 
-        # 2. Traffic: Traffic Collapse / Total Outage
+        # Traffic: Traffic Collapse / Total Outage
         - alert: TrafficCollapse
           expr: |
             (
@@ -38,7 +38,7 @@ spec:
             summary: '{{`Traffic collapse / total outage on target {{ $labels.target }}`}}'
             hint: "Check if prober workers are failing to reach the endpoint or if the target service port is misconfigured."
 
-        # 3. Errors: High failure rate
+        # Errors: High failure rate
         - alert: HighErrorRate
           expr: sum(increase(kube_prober_errors_total[2m])) by (target) > 0.01
           for: 1m
@@ -48,7 +48,7 @@ spec:
             summary: '{{`High error rate detected on target {{ $labels.target }}`}}'
             hint: "Target application is failing probes (4xx/5xx/timeout). Inspect pod logs via 'kubectl logs' or check service endpoints."
 
-        # 4. Saturation: Worker Capacity Reached
+        # Saturation: Worker Capacity Reached
         - alert: MaxWorkersReached
           expr: |
             (
@@ -60,6 +60,36 @@ spec:
           annotations:
             summary: "Prober worker capacity saturated (>= 90% of max workers utilized)"
             hint: "Increase WORKERS environment variable or adjust PROBE_INTERVAL_SECONDS to reduce worker queue pressure."
+        
+        # Certificate Expiry Warning (Triggers if cert expires in under 30 days)
+        - alert: TLSCertificateExpiringSoon
+          expr: kube_prober_tls_cert_expiry_days < 30
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: '{{`TLS Certificate expiring soon on target {{ $labels.target }}`}}'
+            hint: "Renew the TLS/SSL certificate or check cert-manager secret renewal status."
+
+        # TLS Handshake Failure (Triggers on handshake/CA trust errors)
+        - alert: TLSHandshakeFailed
+          expr: sum(rate(kube_prober_errors_total{category="tls_error"}[2m])) by (target) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{`TLS handshake failed on target {{ $labels.target }}`}}'
+            hint: "Check TLS certificate validity, SAN domain coverage, or local CA trust store."
+
+        # TCP Connection Refused / Layer 4 Failure
+        - alert: TCPConnectionRefused
+          expr: sum(rate(kube_prober_errors_total{category="connection_refused"}[2m])) by (target) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{`TCP connection refused on target {{ $labels.target }}`}}'
+            hint: "Target pod might be down, crash-looping, or rejecting connections on specified port."
 
     - name: kube-prober-slo-recording-rules
       rules:

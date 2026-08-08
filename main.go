@@ -10,7 +10,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
+	"crypto/tls"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/demirdilek/kube-prober/pkg/prober"
@@ -50,9 +50,15 @@ func main() {
 	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
 	dispatcher.Register("https", httpProber.ProbeHTTPTarget)
 
-	// Register TCP handler
-	tcpProber := prober.NewTCPProber()
-	dispatcher.Register("tcp", tcpProber.ProbeTCPTarget)
+	// Configure TLS verification mode via environment variable
+	var tlsCfg *tls.Config
+	if os.Getenv("TLS_INSECURE_SKIP_VERIFY") == "true" {
+		slog.Warn("TLS verification disabled (InsecureSkipVerify=true) - run only in dev/test environments")
+		tlsCfg = &tls.Config{InsecureSkipVerify: true}
+	}
+
+	tlsProber := prober.NewTLSProber(tlsCfg)
+	dispatcher.Register("tls", tlsProber.ProbeTLSTarget)
 
 	// Setup graceful shutdown context listening for SIGINT and SIGTERM OS signals
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

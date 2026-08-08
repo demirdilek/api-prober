@@ -57,6 +57,14 @@ var (
 		},
 		[]string{"category", "hint"},
 	)
+	// TLSCertExpiryGauge tracks the remaining days until the TLS certificate expires.
+	TLSCertExpiryGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kube_prober_tls_cert_expiry_days",
+			Help: "Number of days until the TLS certificate expires.",
+		},
+		[]string{"target"},
+	)
 )
 
 // RegisterMetrics registers all prober metrics with the provided Prometheus registry.
@@ -68,6 +76,7 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		SaturationGauge,
 		MaxWorkersGauge,
 		CategoryHintInfo,
+		TLSCertExpiryGauge,
 	)
 
 	// Populate static category hints directly from ErrorCategory.Hint()
@@ -90,6 +99,7 @@ func DeleteTargetMetrics(target string) {
 	LatencyHistogram.DeleteLabelValues(target)
 	TrafficCounter.DeleteLabelValues(target)
 	SaturationGauge.DeleteLabelValues(target)
+	TLSCertExpiryGauge.DeleteLabelValues(target)
 
 	// Clean up all error categories for this target
 	categories := []ErrorCategory{

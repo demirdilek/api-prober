@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall helm-install-prod local-deploy local-deploy-clean hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-targets-enable test-targets-disable trigger-slow-alert test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-tcp test-alert-clean dev-enable dev-disable dev-status
+.PHONY: help k3d-up docker-build clean-build prometheus-install helm-install all helm-upgrade helm-uninstall helm-install-prod local-deploy local-deploy-clean hard-reset k3d-down clean forward-all stop-forward test lint test-coverage install-argocd apply-gitops argocd-pass test-targets-enable test-targets-disable trigger-slow-alert test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-tcp test-alert-tls-expiry test-alert-tls-handshake test-alert-clean dev-enable dev-disable dev-status
 
 .DEFAULT_GOAL := help
 
@@ -160,6 +160,12 @@ test-alert-saturation: ## Simulate Worker Capacity Saturation (WORKERS=2)
 
 test-alert-tcp: ## Simulate Raw TCP Probing
 	@./scripts/alerts/trigger-tcp.sh
+
+test-alert-tls-expiry: ## Simulate TLS Certificate Expiry Alert
+	@./scripts/alerts/trigger-tls.sh expiry
+
+test-alert-tls-handshake: ## Simulate TLS Handshake Failure Alert
+	@./scripts/alerts/trigger-tls.sh handshake
 
 test-alert-clean: ## Clean up all simulated alert targets and reset prober metrics
 	@./scripts/alerts/cleanup-all.sh
